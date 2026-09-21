@@ -12,7 +12,8 @@
     "start": "node src/index.js",
     "lint": "node scripts/lint.mjs",
     "test": "node --test",
-    "check": "npm run lint && npm test"
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "check": "npm run lint && npm run check:secrets && npm test"
   },
   "dependencies": {
     "ai": "^7.0.107",

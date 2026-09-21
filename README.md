@@ -366,12 +366,21 @@ curl -s -X POST http://127.0.0.1:4319/api/questions \
 ## 🧪 开发
 
 ```bash
-npm run lint    # 语法检查 + 跨平台检查（import 路径大小写、只差大小写的重名文件）
-npm test        # 单元测试，全部用桩替身，不联网、不碰真实配置与题库、不调用任何 API
-npm run check   # lint + test
+npm run lint           # 语法检查 + 跨平台检查（import 路径大小写、只差大小写的重名文件）
+npm test               # 单元测试，全部用桩替身，不联网、不碰真实配置与题库、不调用任何 API
+npm run check:secrets  # 敏感信息自查：拿 data/config.json 里的真密钥反查待提交与已入库文件
+npm run check          # lint + check:secrets + test
 ```
 
-测试覆盖：配置中心（含旧配置迁移、损坏备份、BOM 容错、密钥文件权限）、评判渠道接线（离线构造每个平台的 evaluation model）、三条通道的启停与热重启、后台 API、题库 CRUD、命令解析与各渠道 `/help`、后台界面渲染（在假 DOM 里真跑一遍 `public/app.js`，含抽屉交互）、**进程重启**（spawn 参数 / 守护进程识别 / 新进程起不来时原地恢复 / 接口 200·409·501），以及**并发兜底**（同频道串行、只通关一次、换题期间结果作废、排队上限、全局并发上限、状态回收、并发写盘）。
+`check:secrets` 是为公开仓库准备的一道闸：它把 `data/config.json` 里的真实密钥值（Discord token、评判 API key、后台密码哈希与盐）取出来，比对**将要提交的文件**和**已经入库的整个文件树**，再扫一遍常见密钥写法（Discord token 形状、`sk-` 开头、`Bearer`、赋值式密钥）。命中就非零退出。几个细节：
+
+- 只打印脱敏片段（形如 `abc…yz（72 字符）`），不会把完整密钥打到终端或日志里
+- `.env.example` 里的占位符（`your-discord-bot-token-here`）被显式排除，不会天天误报
+- 未跟踪、又没被 `.gitignore` 拦住的 `*.env` / `config*.json` / `*.pem` / `*.key` 会被点名列出来——这正是最容易误提交的一类
+- 测试夹具文件可以加一行 `check-secrets: allow-pattern-hits` 退出特征扫描；但**真实密钥反查依然生效**，写真密钥照样拦得住
+- 加 `-- --pending` 只看待提交的（更快），`-- --staged` 只看已 `git add` 的
+
+测试覆盖：配置中心（含旧配置迁移、损坏备份、BOM 容错、密钥文件权限）、评判渠道接线（离线构造每个平台的 evaluation model）、三条通道的启停与热重启、后台 API、题库 CRUD、命令解析与各渠道 `/help`、后台界面渲染（在假 DOM 里真跑一遍 `public/app.js`，含抽屉交互）、**进程重启**（spawn 参数 / 守护进程识别 / 新进程起不来时原地恢复 / 接口 200·409·501）、**Discord 卡片**（组件上限、汤底不泄露、交互路由、发起人权限、超长截断），以及**并发兜底**（同频道串行、只通关一次、换题期间结果作废、排队上限、全局并发上限、状态回收、并发写盘、卡片点击串行化）。
 
 ## 📁 项目结构
 
