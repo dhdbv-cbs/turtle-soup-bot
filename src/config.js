@@ -6,7 +6,7 @@
 // - 保存前统一校验，非法值直接拒绝并给出原因
 import 'dotenv/config';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -312,11 +312,33 @@ function stripUndefined(value) {
 
 // ============ 读写 ============
 
+// 写盘同样串行化 + 临时文件名唯一：两个标签页同时保存配置时，
+// 固定临时文件名会互相顶掉，后一个 rename 会 ENOENT 报错
+let saveChain = Promise.resolve();
+let saveSeq = 0;
+
 export async function saveConfig() {
+  const run = saveChain.then(
+    () => writeConfigNow(),
+    () => writeConfigNow(),
+  );
+  saveChain = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
+}
+
+async function writeConfigNow() {
   await mkdir(dirname(CONFIG_FILE), { recursive: true });
-  const tmp = `${CONFIG_FILE}.tmp-${process.pid}`;
-  await writeFile(tmp, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-  await rename(tmp, CONFIG_FILE);
+  const tmp = `${CONFIG_FILE}.tmp-${process.pid}-${++saveSeq}`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    await rename(tmp, CONFIG_FILE);
+  } catch (e) {
+    await unlink(tmp).catch(() => {});
+    throw e;
+  }
 }
 
 export async function loadConfig() {

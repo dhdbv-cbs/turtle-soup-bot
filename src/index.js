@@ -42,7 +42,7 @@ async function main() {
   const runtime = new BotRuntime(handler);
 
   // 5. 后台界面 + API
-  const app = createAdminApp({ runtime, questionStore: questions });
+  const app = createAdminApp({ runtime, questionStore: questions, games });
   const { host, port } = config.admin;
   const server = await new Promise((resolve, reject) => {
     const s = app.listen(port, host, () => resolve(s));

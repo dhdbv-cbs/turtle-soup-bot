@@ -33,7 +33,14 @@ const runtime = {
   apply: async () => {},
 };
 
-const app = createAdminApp({ runtime, questionStore });
+// 并发负载的桩：测试里直接改它，验证概览能反映"正在评判 / 排队 / 活跃频道"
+const fakeGames = {
+  activeJudges: 0,
+  pendingTotal: () => 0,
+  states: new Map(),
+};
+
+const app = createAdminApp({ runtime, questionStore, games: fakeGames });
 const server = app.listen(0, '127.0.0.1');
 await new Promise((resolve) => server.once('listening', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -102,8 +109,27 @@ test('概览返回三条通道状态与评判渠道可用性', async () => {
   assert.equal(r.data.questions, 1);
   assert.equal(r.data.judge.ready, true);
   assert.equal(r.data.judge.label, 'Vercel AI Gateway');
+  // 并发负载：没传 games 时也要有默认值，不能 500
+  assert.equal(typeof r.data.judge.active, 'number');
+  assert.equal(typeof r.data.judge.queued, 'number');
   assert.ok(!r.raw.includes('vck_overview_leak_check'), '概览里不能出现密钥明文');
   assert.ok(!r.raw.includes('apiKey'), '概览里不应带原始渠道配置');
+});
+
+test('概览能反映并发负载（正在评判 / 排队 / 活跃频道数）', async () => {
+  fakeGames.activeJudges = 2;
+  fakeGames.pendingTotal = () => 5;
+  fakeGames.states = new Map([['qq:1', {}], ['discord:1:2', {}]]);
+  try {
+    const r = await call('/api/overview');
+    assert.equal(r.data.judge.active, 2);
+    assert.equal(r.data.judge.queued, 5);
+    assert.equal(r.data.judge.channels, 2);
+  } finally {
+    fakeGames.activeJudges = 0;
+    fakeGames.pendingTotal = () => 0;
+    fakeGames.states = new Map();
+  }
 });
 
 test('评判渠道清单只给 Jev 入口，并带依赖与协议信息', async () => {

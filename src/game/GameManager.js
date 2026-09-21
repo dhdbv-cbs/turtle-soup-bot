@@ -1,6 +1,26 @@
 // 游戏管理器：多人海龟汤，按频道/群隔离状态
+//
+// 并发兜底（同时有几个团体在玩、或同一个群里多人同时提问时）：
+//   1. 状态按 channelKey 隔离（channelKey 带平台前缀），不同群/频道互不影响；
+//   2. 同一个频道里的提问串行处理（队列 + 上限），答题顺序与提问顺序一致，
+//      也不会因为并发评判冒出两条"通关"；
+//   3. 每条提问记录本局编号，评判期间题目被换掉/重置时这条结果直接作废，
+//      既不会写进下一局，也不会让下一局莫名通关；
+//   4. 状态表有上限，长期没人玩的频道会被回收，开很多群也不会无限涨内存。
 import { config } from '../config.js';
-import { log } from '../utils/logger.js';
+import { log, warn } from '../utils/logger.js';
+
+// 每个频道最多排队的提问数（不含正在评判的那一条）
+const MAX_PENDING_PER_CHANNEL = 3;
+// 空闲多久可以回收（进行中的一局永不回收）
+const STATE_IDLE_MS = 12 * 60 * 60 * 1000;
+// 状态表硬上限，超出后从最久没动过的开始回收
+const MAX_CHANNELS = 500;
+// 清理动作最多每分钟做一次，避免每次取状态都遍历
+const PRUNE_INTERVAL_MS = 60 * 1000;
+// 全局同时进行的评判上限：几个团体一起玩、又同时提问时，
+// 超出的请求留在各自频道的队列里排队，而不是一起打向网关（容易被限流报错）
+const MAX_CONCURRENT_JUDGES = 8;
 
 function newState(question = null) {
   return {
@@ -14,21 +34,62 @@ function newState(question = null) {
     ownerId: null,
     ownerName: null,
     createdAt: Date.now(),
+    // 本局编号：换题/重开都会 +1，用来识别"评判期间题目被换掉了"
+    roundId: 0,
+    touchedAt: Date.now(),
   };
 }
 
 export class GameManager {
-  constructor(judge, { winThreshold = config.judge.winThreshold } = {}) {
+  // winThreshold 只作为测试用的覆盖值；正常运行读 config，改了立即生效
+  constructor(judge, { winThreshold = null } = {}) {
     this.judge = judge;
-    this.winThreshold = winThreshold;
+    this.winThresholdOverride = winThreshold;
     this.states = new Map(); // channelKey -> state
+    this.queues = new Map(); // channelKey -> { running, pending: [] }
+    this.lastPrune = 0;
+    this.judgeSlots = { active: 0, waiters: [] }; // 全局评判并发额度
+  }
+
+  // 取一个全局评判额度（满了就在这里等，等的人按先后顺序放行）
+  #acquireJudgeSlot() {
+    if (this.judgeSlots.active < MAX_CONCURRENT_JUDGES) {
+      this.judgeSlots.active++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => this.judgeSlots.waiters.push(resolve));
+  }
+
+  #releaseJudgeSlot() {
+    const next = this.judgeSlots.waiters.shift();
+    if (next) {
+      next(); // 名额直接转交给下一个等待者，active 不变
+      return;
+    }
+    this.judgeSlots.active = Math.max(0, this.judgeSlots.active - 1);
+  }
+
+  // 后台状态展示用
+  get activeJudges() {
+    return this.judgeSlots.active;
+  }
+
+  // 阈值热生效：后台界面改完参数，正在进行的游戏也按新值判定
+  get winThreshold() {
+    return Number.isFinite(this.winThresholdOverride)
+      ? this.winThresholdOverride
+      : config.judge.winThreshold;
   }
 
   getState(channelKey) {
-    if (!this.states.has(channelKey)) {
-      this.states.set(channelKey, newState());
+    let s = this.states.get(channelKey);
+    if (!s) {
+      s = newState();
+      this.states.set(channelKey, s);
+      this.#maybePrune();
     }
-    return this.states.get(channelKey);
+    s.touchedAt = Date.now();
+    return s;
   }
 
   // 一局是否正在进行中（已开始且尚未通关/公布）
@@ -48,6 +109,7 @@ export class GameManager {
     s.ownerId = userId === null ? null : String(userId);
     s.ownerName = userName || null;
     s.createdAt = Date.now();
+    s.roundId += 1;
     return question;
   }
 
@@ -63,6 +125,7 @@ export class GameManager {
     s.participants = new Set();
     s.winner = null;
     s.revealed = false;
+    s.roundId += 1;
     if (userId !== null) {
       s.ownerId = String(userId);
       s.ownerName = userName || s.ownerName;
@@ -79,20 +142,96 @@ export class GameManager {
     return String(userId) === s.ownerId;
   }
 
+  /* ---------------- 提问：按频道串行 ---------------- */
+
+  // 明显不能提问的情况先快速返回，不必进队列
+  #blocked(state) {
+    if (!state.question) return { type: 'hint', text: '还没有题目，先用 /start 开一局。' };
+    if (!state.started) return { type: 'hint', text: '本局还没开始，用 /start 启动。' };
+    if (state.winner) return { type: 'hint', text: '本局已经通关啦！用 /next 换一道。' };
+    if (state.revealed) return { type: 'hint', text: '谜底已公布，用 /next 开始新的一局。' };
+    return null;
+  }
+
   // 处理玩家提问（多人：任何人都可以问）
   async ask(channelKey, userId, userName, message) {
     const s = this.getState(channelKey);
-    if (!s.question) return { type: 'hint', text: '还没有题目，先用 /start 开一局。' };
-    if (!s.started) return { type: 'hint', text: '本局还没开始，用 /start 启动。' };
-    if (s.winner) return { type: 'hint', text: '本局已经通关啦！用 /next 换一道。' };
-    if (s.revealed) return { type: 'hint', text: '谜底已公布，用 /next 开始新的一局。' };
+    const blocked = this.#blocked(s);
+    if (blocked) return blocked;
+    // 记住排队时是哪一局：排队期间换了题，这条提问就不该拿去评判新题目
+    const queuedRound = s.roundId;
+    return this.#enqueue(channelKey, () => this.#askNow(channelKey, userId, userName, message, queuedRound));
+  }
 
-    s.participants.add(String(userId));
+  #staleHint(userId) {
+    return {
+      type: 'hint',
+      userId: userId === null || userId === undefined ? null : String(userId),
+      text: '🔄 题目已经换了，这条提问就不算数啦，按新题目重新问吧。',
+    };
+  }
+
+  #enqueue(channelKey, task) {
+    let q = this.queues.get(channelKey);
+    if (!q) {
+      q = { running: false, pending: [] };
+      this.queues.set(channelKey, q);
+    }
+    if (q.running && q.pending.length >= MAX_PENDING_PER_CHANNEL) {
+      // 兜底：一个人狂刷或全群一起问时，别把评判请求堆成雪球
+      return { type: 'hint', text: '⏳ 这个频道排队的提问有点多，等我把前面几条答完再问～' };
+    }
+    return new Promise((resolve) => {
+      q.pending.push({ task, resolve });
+      this.#drain(channelKey);
+    });
+  }
+
+  async #drain(channelKey) {
+    const q = this.queues.get(channelKey);
+    if (!q || q.running) return;
+    const next = q.pending.shift();
+    if (!next) {
+      this.queues.delete(channelKey);
+      return;
+    }
+    q.running = true;
+    let result;
+    try {
+      result = await next.task();
+    } catch (e) {
+      // 单条提问出问题不能卡住整个频道
+      warn(`[${channelKey}] 处理提问时出错：`, e?.message || String(e));
+      result = { type: 'hint', text: '⚠️ 这条提问处理失败了，请再问一次。' };
+    } finally {
+      q.running = false;
+    }
+    next.resolve(result);
+    this.#drain(channelKey);
+  }
+
+  async #askNow(channelKey, userId, userName, message, queuedRound) {
+    // 排队期间状态可能已经变了（通关/换题/reset），执行时重新取一次
+    const s = this.getState(channelKey);
+    if (s.roundId !== queuedRound) return this.#staleHint(userId);
+    const blocked = this.#blocked(s);
+    if (blocked) return blocked;
+
     const trimmed = String(message ?? '').trim();
     if (!trimmed) return { type: 'hint', text: '提问内容不能为空。' };
 
-    // 调用评判模型
-    const judge = await this.judge.judge(s.question, trimmed);
+    const roundId = s.roundId;
+    const question = s.question;
+    s.participants.add(String(userId));
+
+    // 调用评判模型（可能几秒到几十秒）：全局最多 8 条同时跑，多的在频道队列里等
+    await this.#acquireJudgeSlot();
+    let judge;
+    try {
+      judge = await this.judge.judge(question, trimmed);
+    } finally {
+      this.#releaseJudgeSlot();
+    }
 
     // 评判渠道没配好或调用失败：不记入历史，直接把原因告诉玩家
     if (judge.failed) {
@@ -103,7 +242,14 @@ export class GameManager {
       };
     }
 
-    const record = {
+    // 评判期间题目被换掉/重置了：这条结果已经对不上任何题目，直接丢弃
+    const current = this.states.get(channelKey);
+    if (current !== s || current.roundId !== roundId) {
+      log(`[${channelKey}] 评判期间题目已更换，丢弃这条提问结果`);
+      return this.#staleHint(userId);
+    }
+
+    s.history.push({
       userId: String(userId),
       userName,
       message: trimmed,
@@ -111,8 +257,7 @@ export class GameManager {
       yesProb: judge.yesProb,
       similarity: judge.similarity,
       ts: Date.now(),
-    };
-    s.history.push(record);
+    });
 
     // 胜利判定：与谜底的相似度达到阈值
     if (judge.similarity >= this.winThreshold) {
@@ -132,7 +277,7 @@ export class GameManager {
         userName,
         similarity: judge.similarity,
         question: s.question,
-        history: s.history,
+        history: [...s.history],
         participantCount: s.participants.size,
       };
     }
@@ -157,12 +302,45 @@ export class GameManager {
     };
   }
 
+  /* ---------------- 状态清理 ---------------- */
+
+  #maybePrune() {
+    const now = Date.now();
+    if (now - this.lastPrune < PRUNE_INTERVAL_MS && this.states.size <= MAX_CHANNELS) return;
+    this.lastPrune = now;
+    this.prune(now);
+  }
+
+  // 回收空闲频道状态；正在进行的局不会被回收。返回回收数量（测试用）
+  prune(now = Date.now()) {
+    let removed = 0;
+    for (const [key, s] of this.states) {
+      if (this.isRoundActive(s)) continue;
+      if (now - s.touchedAt > STATE_IDLE_MS) {
+        this.states.delete(key);
+        removed++;
+      }
+    }
+    if (this.states.size > MAX_CHANNELS) {
+      const idle = [...this.states.entries()]
+        .filter(([, s]) => !this.isRoundActive(s))
+        .sort((a, b) => a[1].touchedAt - b[1].touchedAt);
+      for (const [key] of idle) {
+        if (this.states.size <= MAX_CHANNELS) break;
+        this.states.delete(key);
+        removed++;
+      }
+    }
+    if (removed) log(`清理空闲频道状态 ${removed} 个，现有 ${this.states.size} 个`);
+    return removed;
+  }
+
   // 公布谜底（手动）
   reveal(channelKey) {
     const s = this.getState(channelKey);
     if (!s.question) return { ok: false, msg: '还没有题目。' };
     s.revealed = true;
-    return { ok: true, question: s.question, history: s.history };
+    return { ok: true, question: s.question, history: [...s.history] };
   }
 
   // 状态摘要
@@ -178,6 +356,7 @@ export class GameManager {
       revealed: s.revealed,
       ownerId: s.ownerId,
       ownerName: s.ownerName,
+      pending: this.queues.get(channelKey)?.pending.length ?? 0,
     };
   }
 
@@ -191,6 +370,18 @@ export class GameManager {
   // 历史总条数
   historyCount(channelKey) {
     return this.getState(channelKey).history.length;
+  }
+
+  // 还有多少条提问在排队（后台状态展示用）
+  pendingCount(channelKey) {
+    return this.queues.get(channelKey)?.pending.length ?? 0;
+  }
+
+  // 所有频道加起来还有多少条在排队
+  pendingTotal() {
+    let n = 0;
+    for (const q of this.queues.values()) n += q.pending.length;
+    return n;
   }
 
   // 重置当前频道

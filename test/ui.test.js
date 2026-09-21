@@ -247,6 +247,28 @@ test('评判页用抽屉列表，默认全部收起', async () => {
   // 旧的"前缀"配置项应该彻底消失，也不再出现 LLM 渠道
   assert.doesNotMatch(html, /命令前缀/);
   assert.doesNotMatch(html, /OpenAI|Anthropic|Claude|Gemini/);
+  assert.match(html, /当前没有正在评判的提问/);
+});
+
+test('评判页显示并发负载：正在评判 / 排队多少条', async () => {
+  const ui = await bootUi({
+    state: { needsSetup: false, authenticated: true, version: '1.0.0' },
+    hash: '#judge',
+    routes: {
+      '/api/overview': {
+        channels: {},
+        questions: 0,
+        uptime: 0,
+        configProblems: [],
+        judge: { ready: true, active: 3, queued: 2, channels: 7 },
+      },
+      '/api/config': judgeConfigFixture(),
+      '/api/judge/providers': PROVIDERS_FIXTURE,
+    },
+  });
+
+  const html = ui.html();
+  assert.match(html, /正在评判 3 条，排队 2 条/);
 });
 
 test('抽屉可以通过锚点直接展开，并显示该渠道的字段', async () => {

@@ -1,5 +1,5 @@
 // 题目库：加载、按顺序出题、运行时导入
-import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,9 @@ function normalizeQuestion(raw) {
 }
 
 export class QuestionStore {
+  #saveChain = Promise.resolve();
+  #tmpSeq = 0;
+
   // file 可注入，便于测试时用临时文件，避免动到真实题库
   constructor({ file = DEFAULT_DATA_FILE } = {}) {
     this.file = file;
@@ -104,11 +107,33 @@ export class QuestionStore {
   }
 
   // 原子写入：先写临时文件再 rename 替换，避免写到一半崩溃把题库写坏
-  async save() {
+  //
+  // 并发兜底：写入串行化 + 临时文件名唯一。
+  // 后台界面两个标签页同时改题、或导入与删除撞在一起时，固定临时文件名会互相顶掉，
+  // 后一个 rename 直接 ENOENT 报错（甚至写坏文件），所以这里排队写、每次换名字。
+  save() {
+    const run = this.#saveChain.then(
+      () => this.#writeNow(),
+      () => this.#writeNow(),
+    );
+    // 保存失败不能毒化后续的保存
+    this.#saveChain = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
+
+  async #writeNow() {
     await mkdir(dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.tmp-${process.pid}`;
-    await writeFile(tmp, JSON.stringify(this.questions, null, 2), 'utf8');
-    await rename(tmp, this.file);
+    const tmp = `${this.file}.tmp-${process.pid}-${++this.#tmpSeq}`;
+    try {
+      await writeFile(tmp, `${JSON.stringify(this.questions, null, 2)}\n`, 'utf8');
+      await rename(tmp, this.file);
+    } catch (e) {
+      await unlink(tmp).catch(() => {});
+      throw e;
+    }
   }
 
   // 批量导入题目（每道需含 puzzle 和 answer，title 可选）

@@ -437,6 +437,7 @@ function judgeHtml() {
   const statusLine = r?.ready
     ? `<span class="dot connected"></span>可用：${esc(r.meta?.label || state.activeProvider)}`
     : `<span class="dot unconfigured"></span>还不可用：${esc(r?.reason || '未配置')}`;
+  const load = state.overview?.judge;
 
   return `${problemsHtml()}
     <div class="card">
@@ -446,6 +447,11 @@ function judgeHtml() {
         ${statusLine}
         <div class="detail">${esc(activeMeta?.note || '')}</div>
       </div>
+      <div class="hint">${
+        load?.active || load?.queued
+          ? `正在评判 ${load.active} 条，排队 ${load.queued} 条（同时最多 8 条，各频道内串行）`
+          : '当前没有正在评判的提问。同一频道内的提问会排队依次评判，规则和判定不受并发影响。'
+      }</div>
       <div class="hint">下面点开任意一个渠道就能填它的密钥和模型；同一时间只用其中一个。</div>
     </div>
 

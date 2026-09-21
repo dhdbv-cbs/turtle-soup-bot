@@ -47,7 +47,17 @@ function publicJudgeStatus() {
   };
 }
 
-export function createAdminApp({ runtime, questionStore }) {
+// 并发情况：同时几个团体在玩时，能一眼看到有没有堆积
+function judgeLoad(games) {
+  if (!games) return { active: 0, queued: 0, channels: 0 };
+  return {
+    active: games.activeJudges,
+    queued: games.pendingTotal(),
+    channels: games.states.size,
+  };
+}
+
+export function createAdminApp({ runtime, questionStore, games = null }) {
   const app = express();
   const sessions = new Map(); // token -> expiresAt
   const loginFailures = new Map(); // ip -> { count, since }
@@ -159,7 +169,7 @@ export function createAdminApp({ runtime, questionStore }) {
       appliedAt: runtime.appliedAt,
       channels: runtime.status(),
       questions: questionStore.count,
-      judge: publicJudgeStatus(),
+      judge: { ...publicJudgeStatus(), ...judgeLoad(games) },
     });
   });
 
