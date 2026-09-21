@@ -159,7 +159,7 @@ npm i @ai-sdk/typesafe-ai   # TypeSafe 官方直连 / 中转的 TypeSafe 协议
 3. 用 OAuth2 URL Generator 邀请机器人（勾选 bot + Send Messages + Read Message History）
 4. 把 Token 填进后台的「Discord」页面
 
-启动时会把 `/help` `/start` 等命令注册到**已加入的每个服务器**（立即生效），同时也注册一份全局命令（最长 1 小时生效）。
+斜杠命令只注册**一份全局命令**：服务器里能用，私聊里也能用，改动最长 1 小时在客户端生效。**不会**再给每个服务器单独注册——那样客户端里同一个 `/help` 会出现两条（Discord 不合并全局与服务器级的同名命令）；启动时若发现旧版本留下过服务器级命令会自动清掉。命令内容没变化时跳过重复注册，所以保存配置导致的热重启不会反复打扰 Discord。
 
 ### QQ · NapCat（OneBot v11）
 1. 安装 [NapCat](https://github.com/NapNeko/NapCatQQ) / [Lagrange](https://github.com/LagrangeDev/Lagrange.Core)

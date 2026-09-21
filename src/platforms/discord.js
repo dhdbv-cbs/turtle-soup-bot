@@ -3,6 +3,7 @@ import { Client, GatewayIntentBits, MessageFlags, Partials } from 'discord.js';
 import { config } from '../config.js';
 import { COMMANDS, isEphemeralCommand } from '../commands.js';
 import { formatAskResult } from './format.js';
+import { syncDiscordCommands } from './discordCommands.js';
 import { proxyRestAgent } from '../proxy.js';
 import { log, error, warn } from '../utils/logger.js';
 
@@ -37,41 +38,35 @@ export async function startDiscord(handler) {
   // 真正的 @：Discord 会把它显示成对方的用户名
   const mention = (id, name) => (id ? `<@${id}>` : name || '玩家');
 
-  // 注册斜杠命令：全局 + 已加入的每个服务器（服务器内的命令立刻生效，全局最长要 1 小时）
+  // 斜杠命令只注册**全局**这一份：
+  // 既在服务器里能用，也在私聊里能用；再给每个服务器单独注册一份的话，
+  // 客户端里同一个命令会出现两条（discord.js 也无法合并），所以服务器级的要清掉。
   async function registerCommands() {
-    try {
-      await client.application.commands.set(APP_COMMANDS);
-    } catch (e) {
-      warn('Discord 全局斜杠命令注册失败：', e.message);
-    }
-    for (const guild of client.guilds.cache.values()) {
-      try {
-        await guild.commands.set(APP_COMMANDS);
-      } catch (e) {
-        warn(`Discord 服务器 ${guild.name} 斜杠命令注册失败：`, e.message);
-      }
-    }
+    return syncDiscordCommands({
+      application: client.application,
+      guilds: client.guilds.cache.values(),
+      commands: APP_COMMANDS,
+      log,
+      warn,
+    });
   }
 
   client.once('ready', () => {
     status.state = 'connected';
-    status.detail = `已登录：${client.user.tag}，正在注册 ${APP_COMMANDS.length} 个斜杠命令…`;
+    status.detail = `已登录：${client.user.tag}，正在同步 ${APP_COMMANDS.length} 个斜杠命令…`;
     log(`Discord 已登录：${client.user.tag}`);
     registerCommands()
-      .then(() => {
-        status.detail = `已登录：${client.user.tag}，斜杠命令 ${APP_COMMANDS.length} 个已注册`;
-        log(`Discord 斜杠命令已注册：${COMMANDS.map((c) => '/' + c.name).join(' ')}`);
-        log('提示：全局命令最长需要 1 小时生效；已加入的服务器内是立即生效的。');
+      .then((r) => {
+        status.detail = r.failed
+          ? `已登录：${client.user.tag}，斜杠命令注册失败（详见日志）`
+          : `已登录：${client.user.tag}，斜杠命令 ${APP_COMMANDS.length} 个已就绪`;
       })
-      .catch((e) => error('Discord 斜杠命令注册异常：', e?.message || String(e)));
+      .catch((e) => error('Discord 斜杠命令同步异常：', e?.stack || String(e)));
   });
 
-  // 被拉进新服务器时，马上把命令注册过去
+  // 被拉进新服务器时不用再注册：全局命令对任何服务器都生效
   client.on('guildCreate', (guild) => {
-    guild.commands
-      .set(APP_COMMANDS)
-      .then(() => log(`Discord 已为新服务器 ${guild.name} 注册斜杠命令`))
-      .catch((e) => warn(`Discord 为 ${guild.name} 注册命令失败：`, e.message));
+    log(`Discord 已加入新服务器：${guild.name}（斜杠命令是全局注册的，无需单独注册）`);
   });
 
   client.on('error', (e) => {

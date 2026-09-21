@@ -26,8 +26,10 @@ export function startOneBot(handler) {
     const headers = ACCESS_TOKEN ? { Authorization: `Bearer ${ACCESS_TOKEN}` } : {};
     // ws 不走 http(s).globalAgent，要用代理得显式传 agent（本机地址默认直连）
     ws = new WebSocket(WS_URL, { headers, agent: proxyWebSocketAgent(WS_URL) });
+    const sock = ws; // 重连后旧连接的事件要认出来并忽略，否则会多排一次重连、开出第二条连接
 
     ws.on('open', () => {
+      if (stopped || ws !== sock) return;
       status.state = 'connected';
       status.detail = `已连接 ${WS_URL}`;
       log(`QQ OneBot WebSocket 已连接：${WS_URL}`);
@@ -44,6 +46,7 @@ export function startOneBot(handler) {
     });
 
     ws.on('message', (raw) => {
+      if (stopped || ws !== sock) return;
       try {
         let data;
         try {
@@ -70,7 +73,7 @@ export function startOneBot(handler) {
     });
 
     ws.on('close', () => {
-      if (stopped) return;
+      if (stopped || ws !== sock) return;
       status.state = 'error';
       status.detail = `连接断开，5 秒后重连（${WS_URL}）`;
       warn('QQ OneBot WebSocket 断开，5 秒后重连…');
@@ -81,6 +84,7 @@ export function startOneBot(handler) {
     });
 
     ws.on('error', (e) => {
+      if (ws !== sock) return;
       status.detail = `连接错误：${e.message}`;
       warn('QQ OneBot WebSocket 错误：', e.message);
     });

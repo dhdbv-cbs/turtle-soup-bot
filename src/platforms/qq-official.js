@@ -359,14 +359,21 @@ export function startQqOfficial(handler) {
       if (stopped) return;
       // ws 不走 http(s).globalAgent，要用代理得显式传 agent
       ws = new WebSocket(url, { agent: proxyWebSocketAgent(url) });
+      const sock = ws; // 重连后旧连接的事件要认出来并忽略，否则可能开出第二条网关连接
       ws.on('open', () => {
+        if (stopped || ws !== sock) return;
         status.detail = '已连接网关，等待 Hello';
       });
-      ws.on('message', onMessage);
+      ws.on('message', (raw) => {
+        if (stopped || ws !== sock) return;
+        onMessage(raw);
+      });
       ws.on('error', (e) => {
+        if (ws !== sock) return;
         warn('QQ 官方机器人 WebSocket 错误：', e?.message || String(e));
       });
       ws.on('close', (code) => {
+        if (stopped || ws !== sock) return;
         stopHeartbeat();
         if (stopped) return;
         status.detail = `连接断开（code ${code}）`;
