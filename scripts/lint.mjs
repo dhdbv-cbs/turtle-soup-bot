@@ -1,9 +1,9 @@
-// 无第三方依赖的静态检查：对 src / test / scripts 下所有 .js / .mjs 跑一遍 node --check
+// 无第三方依赖的静态检查：对 src / test / scripts / public 下所有 .js / .mjs 跑一遍 node --check
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const ROOTS = ['src', 'test', 'scripts'];
+const ROOTS = ['src', 'test', 'scripts', 'public'];
 const TARGET = /\.m?js$/;
 
 function walk(dir, out = []) {

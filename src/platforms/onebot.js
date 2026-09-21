@@ -1,32 +1,38 @@
-// QQ 适配器：OneBot v11 反向 WebSocket（配合 NapCat / Lagrange / LLOneBot）
+// QQ 适配器：OneBot v11（配合 NapCat / Lagrange / LLOneBot）
+//
+// 注意：这里是"机器人主动连接 OneBot 的 WebSocket 服务端"（正向 WS）。
+// 在 NapCat 里要开启「WebSocket 服务端」，地址填 ws://127.0.0.1:3001。
 import WebSocket from 'ws';
 import { config } from '../config.js';
+import { formatAskResult } from './format.js';
 import { log, error, warn } from '../utils/logger.js';
 
-export function startQQ(handler) {
-  const { enabled, wsUrl: WS_URL, accessToken: ACCESS_TOKEN, prefix: PREFIX } = config.qq;
+export function startOneBot(handler) {
+  const { wsUrl: WS_URL, accessToken: ACCESS_TOKEN, prefix: PREFIX } = config.qq.napcat;
 
-  if (!enabled) {
-    log('QQ 平台已禁用（QQ_ENABLED != true）');
-    return null;
-  }
-
+  const status = { state: 'connecting', detail: '正在连接…' };
+  let stopped = false;
   let ws = null;
   let selfId = null; // 机器人 QQ 号
   let echoCounter = 0;
+  let reconnectTimer = null;
   const pending = new Map(); // echo -> resolve
 
   function connect() {
+    if (stopped) return;
     const headers = ACCESS_TOKEN ? { Authorization: `Bearer ${ACCESS_TOKEN}` } : {};
     ws = new WebSocket(WS_URL, { headers });
 
     ws.on('open', () => {
+      status.state = 'connected';
+      status.detail = `已连接 ${WS_URL}`;
       log(`QQ OneBot WebSocket 已连接：${WS_URL}`);
       // 获取机器人自身 QQ 号
       call('get_login_info', {})
         .then((info) => {
           if (info?.user_id) {
             selfId = String(info.user_id);
+            status.detail = `已登录 QQ ${selfId}`;
             log(`QQ 机器人登录号：${selfId}（前缀 ${PREFIX}汤）`);
           }
         })
@@ -60,11 +66,18 @@ export function startQQ(handler) {
     });
 
     ws.on('close', () => {
+      if (stopped) return;
+      status.state = 'error';
+      status.detail = `连接断开，5 秒后重连（${WS_URL}）`;
       warn('QQ OneBot WebSocket 断开，5 秒后重连…');
-      setTimeout(connect, 5000);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 5000);
     });
 
     ws.on('error', (e) => {
+      status.detail = `连接错误：${e.message}`;
       warn('QQ OneBot WebSocket 错误：', e.message);
     });
   }
@@ -133,7 +146,10 @@ export function startQQ(handler) {
       }
       await sendReply(evt, '🤔 思考中…');
       const result = await handler.handleAsk(channelKey, String(userId), userName, askText);
-      await sendReply(evt, formatAskResult(result));
+      const { text } = formatAskResult(result, {
+        mention: (id, name) => (id ? `[CQ:at,qq=${id}]` : name || '玩家'),
+      });
+      await sendReply(evt, text);
     }
   }
 
@@ -152,7 +168,24 @@ export function startQQ(handler) {
   }
 
   connect();
-  return { call, close: () => ws?.close() };
+
+  return {
+    name: 'QQ（NapCat / OneBot v11）',
+    status: () => ({ ...status }),
+    stop() {
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      for (const resolve of pending.values()) resolve(null);
+      pending.clear();
+      try {
+        ws?.close();
+      } catch {}
+      ws = null;
+      status.state = 'stopped';
+      status.detail = '已停止';
+    },
+  };
 }
 
 function splitLong(text, max) {
@@ -164,33 +197,4 @@ function splitLong(text, max) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-// 只 @ 提问者/通关者本人，其余人不受打扰
-function atOf(id, fallbackName) {
-  return id ? `[CQ:at,qq=${id}]` : fallbackName || '玩家';
-}
-
-function formatAskResult(result) {
-  if (!result) return '评判失败，请重试。';
-
-  switch (result.type) {
-    case 'win': {
-      const names = [...new Set((result.history || []).map((h) => h.userName))];
-      return (
-        `🎉 通关！由 ${atOf(result.userId, result.userName)} 揭示谜底（相似度 ${(result.similarity * 100).toFixed(0)}%）\n\n` +
-        `参与玩家（${result.participantCount} 人）：${names.join('、')}\n\n` +
-        `【完整谜底】\n${result.question.answer}\n\n` +
-        `用「汤 下一题」开始新的一局！`
-      );
-    }
-
-    case 'answer': {
-      return `${atOf(result.askerId, result.asker)}：${result.answer}（与谜底相似度 ${(result.similarity * 100).toFixed(0)}%）`;
-    }
-
-    case 'hint':
-    default:
-      return result.text || '无法处理该提问。';
-  }
 }

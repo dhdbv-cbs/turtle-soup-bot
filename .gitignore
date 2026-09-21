@@ -1,10 +1,12 @@
 # 依赖与运行产物
 node_modules/
 
-# 本地配置（含密钥），模板见 .env.example
+# 本地配置（含密钥与后台密码），模板见 .env.example
+# 正常使用不需要手改它：所有配置都在后台界面里改
 .env
+data/config.json
 
-# 题目库损坏时的自动备份与临时文件
+# 题目库/配置损坏时的自动备份与临时文件
 data/*.corrupt-*.bak
 data/*.tmp-*
 

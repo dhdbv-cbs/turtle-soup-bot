@@ -124,3 +124,40 @@ test('加载时会跳过不合法条目并重新编号缺失 id', async () => {
     [1, 2],
   );
 });
+
+test('update() 修改单题并落盘，空汤底会被拒绝', async () => {
+  const { file, store } = await tempStore(SAMPLE);
+  await store.load();
+
+  const updated = await store.update(2, { title: '二（改）', puzzle: '新汤面' });
+  assert.equal(updated.title, '二（改）');
+  assert.equal(updated.puzzle, '新汤面');
+  assert.equal(updated.answer, '汤底2', '未提供的字段应保持原值');
+
+  await assert.rejects(() => store.update(2, { answer: '   ' }), /不能为空/);
+  assert.equal(await store.update(999, {}), null);
+
+  const reloaded = new QuestionStore({ file });
+  await reloaded.load();
+  assert.equal(reloaded.get(2).puzzle, '新汤面');
+});
+
+test('remove() 删除单题并修正指针', async () => {
+  const { store } = await tempStore(SAMPLE);
+  await store.load();
+
+  store.goto(3);
+  assert.equal(await store.remove(3), true);
+  assert.equal(store.count, 2);
+  assert.equal(store.current().id, 2, '指针应回退到剩下的最后一题');
+  assert.equal(await store.remove(999), false);
+});
+
+test('listAll() 返回完整题目副本', async () => {
+  const { store } = await tempStore(SAMPLE);
+  await store.load();
+  const all = store.listAll();
+  assert.equal(all[0].answer, '汤底1');
+  all[0].answer = '被改坏了';
+  assert.equal(store.questions[0].answer, '汤底1', '不应影响内部数据');
+});

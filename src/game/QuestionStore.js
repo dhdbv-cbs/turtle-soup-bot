@@ -154,4 +154,41 @@ export class QuestionStore {
   get count() {
     return this.questions.length;
   }
+
+  // 按 id 取单题
+  get(id) {
+    return this.questions.find((q) => q.id === Number(id)) ?? null;
+  }
+
+  // 完整题目列表（含汤面/汤底，后台界面与导出用）
+  listAll() {
+    return this.questions.map((q) => ({ ...q }));
+  }
+
+  // 修改单题（后台界面用）
+  async update(id, patch = {}) {
+    const q = this.get(id);
+    if (!q) return null;
+
+    const puzzle = patch.puzzle === undefined ? q.puzzle : String(patch.puzzle ?? '').trim();
+    const answer = patch.answer === undefined ? q.answer : String(patch.answer ?? '').trim();
+    const title = patch.title === undefined ? q.title : String(patch.title ?? '').trim();
+    if (!puzzle || !answer) throw new Error('汤面与汤底都不能为空');
+
+    q.puzzle = puzzle;
+    q.answer = answer;
+    q.title = title || q.title;
+    await this.save();
+    return q;
+  }
+
+  // 删除单题
+  async remove(id) {
+    const idx = this.questions.findIndex((q) => q.id === Number(id));
+    if (idx < 0) return false;
+    this.questions.splice(idx, 1);
+    if (this.pointer >= this.questions.length) this.pointer = this.questions.length - 1;
+    await this.save();
+    return true;
+  }
 }
