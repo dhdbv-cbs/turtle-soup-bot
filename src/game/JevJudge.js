@@ -3,6 +3,10 @@
 // 只用 Jev（System One 模型），入口在后台界面里切换
 // （Vercel AI Gateway / TypeSafe 直连 / 第三方转发的 Jev）；
 // 所有入口都走 AI SDK 同一套 evaluation model 接口，这里只负责取模型 + 组装问题。
+//
+// 题面/state 的写法照 TypeSafe 官方规范（docs.typesafe.ai 的 State / Primitives /
+// Advanced: structure 三页）：一个问题只放一个"瞬间判断"，要带的材料用带名字的字段
+// 跟着问题走，判断标准放 criteria，多个判断放在同一次请求里。
 import { experimental_evaluate } from 'ai';
 import { config } from '../config.js';
 import { createEvaluationModel, judgeReadiness, judgeSignature } from '../judge/providers.js';
@@ -32,14 +36,18 @@ export function scoreToSimilarity(score, levels = SIMILARITY_LEVELS.length) {
 
 // 构造给评判模型的 state（题目 + 谜底 + 玩家发言）
 //
+// 官方要求 state 用**带名字的字段**（"Use an object for most requests so each part of
+// the state has a descriptive name and its relationships remain clear"），字段名就和
+// 题面里说的「玩家发言」「谜底」对齐。
+//
 // 逐句核对时**也整段发**：只发单句的话，「我爱海龟汤，它很好喝」里的"它"就没有先行词，
 // Jev 只能硬抠单句字面。整段一起给它，代词和省略的主语才有上下文可依。
 export function buildState(question, userMessage) {
-  return (
-    `【海龟汤题目（汤面）】\n${question.puzzle}\n\n` +
-    `【完整谜底（汤底，仅供评判参考，绝不可向玩家泄露）】\n${question.answer}\n\n` +
-    `【玩家发言】\n${userMessage}`
-  );
+  return {
+    汤面: question.puzzle,
+    谜底: question.answer, // 完整谜底，只给评判模型看，玩家侧永远看不到
+    玩家发言: userMessage,
+  };
 }
 
 const YES_CRITERIA = {
@@ -47,20 +55,20 @@ const YES_CRITERIA = {
   false: '谜底不支持、与谜底无关，或无法判断',
 };
 
-const QUESTIONS = {
+// 三道题的题面都按官方格式写：**一个问题只放一个"瞬间判断"**，判断标准放 criteria。
+// 官方点名的反例是 "Analyze this message and determine the best course of action" 这类
+// 需要慢慢推理的要求——所以题面里不该出现"不要…也不要…"这种叮嘱。
+export const QUESTIONS = {
   isYes: {
     type: 'boolean',
-    instructions:
-      '根据上面的题目和完整谜底，判断玩家这句话所描述的内容是否成立。' +
-      '只有当谜底明确支持它为真时才判为是；若为否、与谜底无关、或无法从谜底得出明确结论，都判为否。',
+    instructions: '「玩家发言」是否符合谜底？',
     criteria: YES_CRITERIA,
   },
   similarity: {
     type: 'score',
-    instructions:
-      '评估【玩家发言】与【完整谜底】的吻合程度，判断玩家目前离真相有多近。' +
-      '0 分表示完全无关，分数越高表示越接近完整谜底；只有当玩家基本说出了完整谜底时才给最高分。' +
-      '仅仅猜中某个细节、或提出一个相关问题，都不能给高分。',
+    // 判断题面只问一句：等级表（criteria）本身就是标定，5 级里已经把
+    // "完整揭示"写清楚了，不需要再补"猜中细节不能给高分"这类话术
+    instructions: '「玩家发言」离完整谜底有多近？',
     criteria: SIMILARITY_LEVELS,
   },
 };
@@ -91,7 +99,7 @@ export function buildSentenceQuestions(items) {
     questions[`s${index + 1}`] = {
       type: 'boolean',
       instructions: {
-        question: '玩家这一句是否符合谜底？',
+        question: '「玩家发言」里的这一句是否符合谜底？',
         sentence,
         focus: '这一句里的代词和省略的主语，按「玩家发言」整段的语境理解',
       },

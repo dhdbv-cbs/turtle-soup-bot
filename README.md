@@ -154,18 +154,19 @@ http://127.0.0.1:4319
 
 | 官方规则 | 本项目的落地 |
 |----------|--------------|
-| **一个问题只放一个瞬间判断**——"Ask for one snap judgment per question"，"Analyze this message and determine the best course of action" 被明确列为反例 | 逐句核对问的就是「玩家这一句是否符合谜底？」，不写"不要孤立抠字面"这类叮嘱 |
-| **要带的材料用结构化字段跟着问题走**——"pass in the relevant subfields instead of serializing them into a string template" | `instructions` 用对象：`{ question, sentence, focus }` |
+| **一个问题只放一个瞬间判断**——"Ask for one snap judgment per question"，"Analyze this message and determine the best course of action" 被明确列为反例 | 三道题的题面都是短问题：`「玩家发言」是否符合谜底？`、`「玩家发言」离完整谜底有多近？`、逐句核对的 `「玩家发言」里的这一句是否符合谜底？` |
+| **要带的材料用结构化字段跟着问题走**——"pass in the relevant subfields instead of serializing them into a string template" | 逐句核对把句子放进 `instructions`：`{ question, sentence, focus }`，而不是拼进题面字符串 |
+| **state 用带名字的字段**——"Use an object for most requests so each part of the state has a descriptive name" | `state = { 汤面, 谜底, 玩家发言 }`（Jev 只吃文本，字段值都是字符串） |
 | **多个判断放同一次请求**——所有问题共享同一个 state、各自独立求值、答案按你给的 key 返回 | `/ask` 的「整段相似度 + 每句一个布尔题」就是一次请求；`@ai-sdk/typesafe-ai` 也只发**一次** `POST /v1/systemone` |
 | **问题的 id 不会发给模型**——"The ids are not sent to the model" | 题面自足：句子写在 `instructions.sentence` 里，绝不写"判断 s2 那一句" |
 | **`criteria` 说明"是/否"各代表什么**（Noul 的 `criteria.true/false` 是可选澄清） | 判断标准放 criteria，不堆在题面里 |
 | `type: 'boolean'` 在 TypeSafe 侧就是 **Noul** 原语 | 返回的是 0~1 的 `noul`，本项目按 `config.judge.yesThreshold` 折成 ✅/❌ |
 
-三处**故意没改**的地方（都直接牵动通关判定，要等配好 Key 能真跑之后再动，不盲改）：
+题面里**不该出现**的词（`test/jevJudge.test.js` 里当回归断言盯着）：`不要` / `分析` / `只有当` / `不能给高分`——一旦出现，就说明又把"慢慢推理"和调校话术塞回了题面。校准信息留在该在的地方：相似度的 5 级 `criteria` 里已经写明「完整揭示 = 准确、完整地复述了谜底的核心真相」。
 
-- **`isYes` / `similarity` 两道老题仍是长句式**：`isYes` 的题面与 criteria 有重复；`similarity` 题面里带着"仅仅猜中某个细节不能给高分"这类调校话术。它们标定着 `config.judge.winThreshold`，这一轮只改了新增的逐句题面。
-- **state 还是带【】标签的整段文本**：官方建议多段内容用对象（"Use an object for most requests"，例如 `{ 汤面, 汤底, 玩家发言 }`）。换成对象会让 `similarity` 看到的东西变样，可能影响通关标定，所以先不动。
-- **题面语言是中文**：官方 State 页写明 Jev 的主要训练语言是英语，"other languages, including CJK scripts, are accepted but **currently have lower accuracy**"。材料只能是中文，但 `instructions` / `criteria` 这类**判断指令**换成英文有机会更准——同样留到能真跑评判时再对比。
+**语义没动的部分**：`similarity` 的等级表（`SIMILARITY_LEVELS`）和 state 的内容一字未改，只是题面变短、state 从带【】标签的整段文本变成命名对象；`config.judge.winThreshold` 的标定依据因此保持原样。首次配好 Key 真跑时，若觉得通关松紧不对，调 `winThreshold` 或等级描述，而不是把长题面加回来。
+
+**题面语言保持中文**（自觉的取舍）：官方 [State](https://docs.typesafe.ai/concepts/state) 页写明 Jev 的主要训练语言是英语，"other languages, including CJK scripts, are accepted but **currently have lower accuracy**"。材料只能是中文，指令改英文理论上更准，但那会让"判断标准"和"材料"变成两种语言，且眼下没法实测对比，所以不做。
 
 ### 要不要为每个入口写一套？
 

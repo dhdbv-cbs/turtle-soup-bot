@@ -17,6 +17,7 @@ const {
   JevJudge,
   scoreToSimilarity,
   SIMILARITY_LEVELS,
+  QUESTIONS,
   buildState,
   buildSentenceQuestions,
 } = await import('../src/game/JevJudge.js');
@@ -41,14 +42,46 @@ test('相似度等级表至少 2 级（score 题型要求）', () => {
   assert.ok(SIMILARITY_LEVELS.length >= 2);
 });
 
-test('逐句核对：整段一起发给 Jev，代词才有先行词（回归：硬抠单句）', () => {
+test('state 用带名字的字段，整段发言原样在里面（官方推荐形状）', () => {
   const question = { puzzle: '汤面', answer: '汤底' };
   const full = '我爱海龟汤，它很好喝';
   const state = buildState(question, full);
 
-  // 整段在 state 里，Jev 能看到"它"指的是海龟汤
-  assert.match(state, /【玩家发言】\n我爱海龟汤，它很好喝/);
-  assert.match(state, /【完整谜底/);
+  // 官方："Use an object for most requests so each part of the state has a descriptive name"
+  assert.deepEqual(Object.keys(state), ['汤面', '谜底', '玩家发言']);
+  assert.equal(state.汤面, '汤面');
+  assert.equal(state.谜底, '汤底');
+  // 整段都在，Jev 才能看出"它"指的是海龟汤——逐句核对靠的是这个，不是题面里的叮嘱
+  assert.equal(state.玩家发言, full);
+  // Jev 只吃文本：state 里不该混进数字/布尔
+  assert.ok(Object.values(state).every((v) => typeof v === 'string'));
+});
+
+test('三道题的题面都合 System One 的格式：短问题 + criteria 带标准', () => {
+  assert.equal(QUESTIONS.isYes.type, 'boolean');
+  assert.ok(QUESTIONS.isYes.instructions.length <= 30, QUESTIONS.isYes.instructions);
+  assert.match(QUESTIONS.isYes.instructions, /是否符合谜底/);
+  // 官方："The ids are not sent to the model"——题面要自足，指向 state 里的字段名
+  assert.match(QUESTIONS.isYes.instructions, /玩家发言/);
+  assert.deepEqual(Object.keys(QUESTIONS.isYes.criteria).sort(), ['false', 'true']);
+
+  assert.equal(QUESTIONS.similarity.type, 'score');
+  assert.ok(QUESTIONS.similarity.instructions.length <= 30, QUESTIONS.similarity.instructions);
+  // 等级表就是标定，必须原样交给模型
+  assert.equal(QUESTIONS.similarity.criteria, SIMILARITY_LEVELS);
+  assert.ok(SIMILARITY_LEVELS.length >= 2 && SIMILARITY_LEVELS.length <= 10, '官方 score 支持 2~10 级');
+  assert.match(SIMILARITY_LEVELS.at(-1), /完整/);
+});
+
+test('题面里不该出现"慢慢推理"式的话术（官方点名的反例）', () => {
+  const all = { ...QUESTIONS, ...buildSentenceQuestions(['我爱海龟汤', '它很好喝']) };
+  const text = JSON.stringify(all);
+  // 这些词一旦回到题面，就说明又把校准/推理要求塞回了 instructions
+  for (const banned of ['不要', '分析', '只有当', '不能给高分', '尽量', '仔细']) {
+    assert.ok(!text.includes(banned), `题面里不该有「${banned}」：${text}`);
+  }
+  // 校准信息留在等级描述里
+  assert.ok(SIMILARITY_LEVELS.some((lv) => /核心真相/.test(lv)));
 });
 
 test('逐句核对题面：一句话一个"瞬间判断"，材料跟着问题走（官方 System One 写法）', () => {
@@ -88,6 +121,92 @@ test('judgeSentences 走同一条"没配 Key 就失败"的路，不联网', asyn
   assert.equal(r.failed, true);
   assert.match(r.error, /API Key/);
   assert.deepEqual(r.items, []);
+});
+
+// 用假模型走一遍**真实的 SDK 校验**（validateEvaluationInput / validateEvaluationAnswers）。
+// 这样"题面格式合不合规"就不只是形状断言，而是 AI SDK 真的放行、并且答案能正确解析。
+function fakeModel(answers, { onEvaluate } = {}) {
+  return {
+    specificationVersion: 'v4',
+    provider: 'test',
+    modelId: 'fake-jev',
+    supportedQuestionTypes: ['choice', 'score', 'boolean'],
+    async doEvaluate(call) {
+      onEvaluate?.(call);
+      // warnings 不能省：SDK 的 logWarnings 会读它的 length
+      return { answers, usage: { inputTokens: 12, outputTokens: 3 }, warnings: [] };
+    },
+  };
+}
+
+test('judge()：走通 SDK 校验，答案解析成 isYes / similarity', async () => {
+  const judge = new JevJudge();
+  let seen = null;
+  judge.resolveModel = async () =>
+    fakeModel(
+      {
+        isYes: { type: 'boolean', probability: 0.93 },
+        // score 答案里的 probabilities 是可选的，一旦给出就必须是完整分布且均值等于 score
+        similarity: { type: 'score', score: 4 },
+      },
+      { onEvaluate: (call) => { seen = call; } },
+    );
+
+  const r = await judge.judge({ puzzle: '汤面文字', answer: '汤底文字' }, '他喝了海龟汤就死了');
+  assert.equal(r.failed, false);
+  assert.equal(r.yesProb, 0.93);
+  assert.equal(r.isYes, 0.93 >= config.judge.yesThreshold);
+  assert.equal(r.similarity, 1, '5 级里给第 4 级 = 满分');
+  assert.equal(r.usage.totalTokens, 15);
+
+  // 发给模型的东西：state 是命名对象，玩家发言原样在里面
+  assert.deepEqual(Object.keys(seen.state), ['汤面', '谜底', '玩家发言']);
+  assert.equal(seen.state.玩家发言, '他喝了海龟汤就死了');
+  assert.equal(seen.questions, QUESTIONS);
+});
+
+test('judgeSentences()：一次请求判完所有句子（SDK 校验放行 + 逐句解析）', async () => {
+  const judge = new JevJudge();
+  let seen = null;
+  judge.resolveModel = async () =>
+    fakeModel(
+      {
+        s1: { type: 'boolean', probability: 0.99 },
+        s2: { type: 'boolean', probability: 0.02 },
+        s3: { type: 'boolean', probability: 0.97 },
+      },
+      { onEvaluate: (call) => { seen = call; } },
+    );
+
+  const items = ['我爱海龟汤', '凶手是医生', '它很好喝'];
+  const full = '我爱海龟汤，凶手是医生，它很好喝';
+  const r = await judge.judgeSentences({ puzzle: '汤面', answer: '汤底' }, full, items);
+
+  assert.equal(r.failed, false);
+  assert.deepEqual(r.items, [
+    { text: '我爱海龟汤', isYes: true },
+    { text: '凶手是医生', isYes: false },
+    { text: '它很好喝', isYes: true },
+  ]);
+  // 一次请求：整段在 state 里，三句各一条题，材料跟着各自的问题走
+  assert.equal(seen.state.玩家发言, full);
+  assert.deepEqual(Object.keys(seen.questions), ['s1', 's2', 's3']);
+  assert.equal(seen.questions.s2.instructions.sentence, '凶手是医生');
+  assert.equal(seen.questions.s2.instructions.question, '「玩家发言」里的这一句是否符合谜底？');
+});
+
+test('模型漏答一题 → SDK 直接报错，我们如实报"评判失败"，不拿错结果', async () => {
+  const judge = new JevJudge();
+  judge.resolveModel = async () =>
+    fakeModel({
+      // 只答了 s1，s2 没答：SDK 会拒绝（每个问题必须恰好一个答案）
+      s1: { type: 'boolean', probability: 0.9 },
+    });
+
+  const r = await judge.judgeSentences({ puzzle: '汤面', answer: '汤底' }, '甲句。乙句。', ['甲句', '乙句']);
+  assert.equal(r.failed, true);
+  assert.deepEqual(r.items, []);
+  assert.match(r.error, /评判调用失败|评判超时/);
 });
 
 test('没配 API Key 时：明确失败、给出原因、不联网、不抛异常', async () => {
