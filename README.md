@@ -9,7 +9,7 @@ Discord + QQ 双平台的海龟汤游戏机器人，用 **Jev** 评判玩家的�
 - **三条消息通道**：Discord（原生斜杠命令）、QQ（NapCat / OneBot v11）、QQ 官方机器人（QQ 开放平台），可任意组合启用
 - **每个渠道一份 `/help`**：Discord 讲原生斜杠命令与 @我，QQ 群讲"先 @我 再发"，官方机器人讲被动回复的条数限制；文案可在后台里覆盖
 - **网页后台**：密码登录，配置、题库、运行状态全在浏览器里操作，保存即热重启对应通道
-- **多评判渠道**：Vercel AI Gateway / TypeSafe 官方直连 / OpenAI / Anthropic / Google / 自建网关，抽屉式切换，每个渠道各存一份密钥
+- **只认 Jev**：评判只用 Jev（System One 模型）的「是/否 + 相似度」，不接普通 LLM；入口可用 Vercel AI Gateway、TypeSafe 官方直连、或第三方转发的 Jev，抽屉式切换，每个入口各存一份密钥
 - **相似度通关**：用 `score` 题型得到 0~100% 的接近程度，达到阈值自动判胜利并公布谜底
 - **多人游戏**：按频道/群隔离状态，任何人都可提问，集体通关；一局进行中只有发起人能换题
 - **题库管理**：界面上增删改查、批量导入 JSON、导出备份
@@ -78,40 +78,44 @@ http://127.0.0.1:4319
 - 一局进行中只有本局发起人（用 `/start` 的人）能换题；本局结束后任何人都可以换
 - 换题即开启新一局，参与人数与提问历史自动清零
 
-## 🧠 评判渠道怎么选
+## 🧠 评判入口怎么选
 
-三条通道只是"在哪儿聊天"；评判模型是另一套东西，决定"谁来判断对错"。后台「评判渠道」页是一个抽屉列表，点开哪个就能填哪个，同一时间只用一个。
+三条消息通道只是"在哪儿聊天"；评判是另一套东西，决定"谁来判断对错"。**本项目只用 Jev**（TypeSafe 的 System One 模型），不接普通 LLM —— 评判需要的是稳定的「是/否 + 相似度」，不是聊天。后台「评判渠道」页是一个抽屉列表，点开哪个就能填哪个，同一时间只用一个。
 
-### 哪些平台能跑 Jev（2026-09 调研）
+### Jev 目前有这几个入口（2026-09 调研）
 
-| 平台 | 模型名 | 说明 |
+| 入口 | 模型名 | 说明 |
 |------|--------|------|
-| **Vercel AI Gateway** | `typesafe-ai/jev` | 默认渠道，**内置依赖开箱可用，不需要等待名单** |
+| **Vercel AI Gateway** | `typesafe-ai/jev` | 默认入口，**内置依赖、开箱可用、无需等待名单** |
 | **TypeSafe 官方直连** | `jev-latest` | `api.typesafe.ai`，需要官方早期访问资格（waitlist） |
-| Netlify AI Gateway | `typesafe-ai/jev` | 只能在 Netlify Functions 里用，自建部署用不上 |
+| **第三方转发（Jev）** | 看中转站 | 别人搭的 Jev 中转：填它的 Base URL、密钥、模型名，再选它兼容的协议 |
 
-另外 OpenAI、Anthropic、Google 也实现了 AI SDK 的 evaluation model 协议，可以完成同样的「是/否 + 相似度」评判（模型不是 Jev，速度与成本不同），也在抽屉列表里。
+> Netlify AI Gateway 也能用 Jev，但只能在 Netlify Functions 里跑，自建部署用不上。
 
 参考：[Vercel AI Gateway 的 Evaluation 文档](https://vercel.com/docs/ai-gateway/modalities/evaluation)、[AI SDK Evaluation 文档](https://ai-sdk.dev/docs/ai-sdk-core/evaluation)、[TypeSafe 发布公告](https://typesafe.ai/blog/introducing-system-one-models-and-jev)、[Netlify 的 Jev 上线说明](https://www.netlify.com/changelog/typesafe-jev-ai-gateway)。
 
-### 要不要为每个平台写一套？
+### 要不要为每个入口写一套？
 
-**不用。** 这些平台都实现了 AI SDK 同一套 `Experimental_EvaluationModel` 接口（`provider.evaluationModel(modelId)`，返回的对象实现 `doEvaluate`），所以评判逻辑只有一份，差别仅在"怎么拿到模型实例"。代码里对应 `src/judge/providers.js` 的登记表：一个平台一条记录（依赖包名 + 工厂函数 + 默认模型），运行时按当前渠道动态构造。
+**不用。** 这些入口都实现了 AI SDK 同一套 `Experimental_EvaluationModel` 接口（`provider.evaluationModel(modelId)`，返回的对象实现 `doEvaluate`），所以评判逻辑只有一份，差别仅在"怎么拿到模型实例"。代码里对应 `src/judge/providers.js` 的登记表：一个入口一条记录（依赖包 + 工厂函数 + 默认模型），运行时按当前渠道动态构造。
 
-想加新平台，只要它有 `evaluationModel()` 工厂，往那张表里加一条即可。
+第三方转发的两种常见协议都支持，在下拉框里选：
+
+| 协议 | 适用 | 模型名一般是 |
+|------|------|--------------|
+| **TypeSafe 直连协议**（默认） | 中转站转发的是 `api.typesafe.ai` | `jev-latest` |
+| **AI Gateway 协议** | 中转站转发的是 Vercel AI Gateway（`/v4/ai`） | `typesafe-ai/jev` |
+
+想加新入口，只要它有 `evaluationModel()` 工厂，往那张表里加一条即可。
 
 ### 依赖说明
 
-`@ai-sdk/gateway` 是随 `ai` 一起装好的；另外四个渠道的 provider 包是 **optionalDependencies**：
+`@ai-sdk/gateway` 随 `ai` 一起装好（Vercel 入口和中转的 AI Gateway 协议都用它）；只有 TypeSafe 直连协议需要额外装一个包：
 
 ```bash
-npm i @ai-sdk/typesafe-ai   # TypeSafe 官方直连
-npm i @ai-sdk/openai        # OpenAI
-npm i @ai-sdk/anthropic     # Anthropic
-npm i @ai-sdk/google        # Google Gemini
+npm i @ai-sdk/typesafe-ai   # TypeSafe 官方直连 / 中转的 TypeSafe 协议
 ```
 
-没装的渠道在界面里会显示「依赖未安装」，按钮禁用并给出安装命令；没装不影响其它渠道使用。
+没装时界面里对应协议会标注「依赖未安装」并给出安装命令，不影响其它入口使用。
 
 ## 🔌 三条消息通道怎么配
 
@@ -159,6 +163,11 @@ curl -s -X PUT http://127.0.0.1:4319/api/config \
   -H "X-Auth-Token: $TOKEN" -H "Content-Type: application/json" \
   -d '{"judge":{"provider":"typesafe","providers":{"typesafe":{"apiKey":"ts-xxx","model":"jev-latest"}}}}'
 
+# 第三方转发的 Jev（protocol 可选 typesafe / gateway）
+curl -s -X PUT http://127.0.0.1:4319/api/config \
+  -H "X-Auth-Token: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"judge":{"provider":"custom","providers":{"custom":{"baseURL":"https://jev.example.com","apiKey":"relay-xxx","model":"jev-latest","protocol":"typesafe"}}}}'
+
 # 批量导入题目
 curl -s -X POST http://127.0.0.1:4319/api/questions \
   -H "X-Auth-Token: $TOKEN" -H "Content-Type: application/json" \
@@ -205,7 +214,7 @@ turtle-soup-bot/
     │   ├── JevJudge.js      # 评判封装（是/不是 + 相似度）
     │   └── GameManager.js   # 游戏状态机
     ├── judge/
-    │   └── providers.js     # 评判渠道登记表（平台 → 依赖包 → 模型工厂）
+    │   └── providers.js     # 评判入口登记表（入口 → 依赖包 → 模型工厂，含中转协议）
     ├── platforms/
     │   ├── discord.js       # Discord（原生斜杠命令）
     │   ├── onebot.js        # QQ（NapCat / OneBot v11）
@@ -214,5 +223,5 @@ turtle-soup-bot/
     ├── web/server.js        # 后台界面服务 + API
     └── utils/
         ├── logger.js
-        └── placeholder.js
+        └── strings.js       # 密钥占位符判断 / 去 BOM 等小工具
 ```

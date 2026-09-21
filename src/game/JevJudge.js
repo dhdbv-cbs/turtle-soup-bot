@@ -1,7 +1,8 @@
 // 评判层：判断玩家提问「是/不是」，并给出玩家发言与谜底的相似度
 //
-// 评判渠道在后台界面里切换（Vercel AI Gateway / TypeSafe 直连 / OpenAI / …），
-// 所有渠道都走 AI SDK 同一套 evaluation model 接口，这里只负责取模型 + 组装问题。
+// 只用 Jev（System One 模型），入口在后台界面里切换
+// （Vercel AI Gateway / TypeSafe 直连 / 第三方转发的 Jev）；
+// 所有入口都走 AI SDK 同一套 evaluation model 接口，这里只负责取模型 + 组装问题。
 import { experimental_evaluate } from 'ai';
 import { config } from '../config.js';
 import { createEvaluationModel, judgeReadiness, judgeSignature } from '../judge/providers.js';

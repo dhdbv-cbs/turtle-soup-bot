@@ -56,19 +56,28 @@ test('渠道没配好时 readiness() 直接告诉后台原因', () => {
 
 test('切换渠道后报错信息会跟着变', async () => {
   const judge = new JevJudge();
+  const original = { ...config.judge.providers.custom };
   config.judge.provider = 'custom';
   try {
+    // 第三方转发默认带模型名，先清掉看看"缺模型"的提示
+    config.judge.providers.custom.model = '';
     const noModel = await judge.judge({ puzzle: '汤面', answer: '汤底' }, '问题');
     assert.equal(noModel.failed, true);
     assert.match(noModel.error, /模型 ID/);
 
-    config.judge.providers.custom.model = 'typesafe-ai/jev';
+    config.judge.providers.custom.model = 'jev-latest';
     const noBase = await judge.judge({ puzzle: '汤面', answer: '汤底' }, '问题');
     assert.equal(noBase.failed, true);
     assert.match(noBase.error, /Base URL/);
+
+    config.judge.providers.custom.baseURL = 'https://jev.example.com';
+    config.judge.providers.custom.apiKey = '';
+    const noKey = await judge.judge({ puzzle: '汤面', answer: '汤底' }, '问题');
+    assert.equal(noKey.failed, true);
+    assert.match(noKey.error, /API Key/);
   } finally {
     config.judge.provider = 'gateway';
-    config.judge.providers.custom.model = '';
+    Object.assign(config.judge.providers.custom, original);
   }
 });
 

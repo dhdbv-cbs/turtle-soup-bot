@@ -94,32 +94,52 @@ test('切换评判渠道：每个渠道的密钥各自保存', async () => {
   await updateConfig({ judge: { provider: 'gateway' } });
 });
 
-test('自定义网关必须填 Base URL', async () => {
-  const bad = await updateConfig({ judge: { provider: 'custom', providers: { custom: { model: 'x' } } } });
+test('第三方转发：必须填 Base URL，协议默认 TypeSafe', async () => {
+  const bad = await updateConfig({ judge: { provider: 'custom', providers: { custom: { model: 'jev-latest' } } } });
   assert.equal(bad.ok, false);
   assert.ok(bad.problems.some((p) => p.includes('Base URL')));
   assert.equal(config.judge.provider, 'gateway', '校验失败不应改变当前渠道');
 
   const good = await updateConfig({
-    judge: { provider: 'custom', providers: { custom: { baseURL: 'https://gw.example.com', model: 'typesafe-ai/jev' } } },
+    judge: {
+      provider: 'custom',
+      providers: { custom: { baseURL: 'https://jev.example.com', model: 'jev-latest', apiKey: 'relay-key' } },
+    },
   });
-  assert.equal(good.ok, true);
+  assert.equal(good.ok, true, JSON.stringify(good.problems));
   assert.equal(config.judge.provider, 'custom');
+  assert.equal(config.judge.providers.custom.protocol, 'typesafe', '默认走 TypeSafe 协议');
+  assert.equal(config.judge.providers.custom.baseURL, 'https://jev.example.com');
+
+  // 换成 AI Gateway 协议
+  const switched = await updateConfig({
+    judge: { providers: { custom: { protocol: 'gateway', model: 'typesafe-ai/jev' } } },
+  });
+  assert.equal(switched.ok, true);
+  assert.equal(config.judge.providers.custom.protocol, 'gateway');
+  assert.equal(config.judge.providers.custom.baseURL, 'https://jev.example.com', '换协议不应丢掉 Base URL');
+
+  const bogus = await updateConfig({ judge: { providers: { custom: { protocol: 'nope' } } } });
+  assert.equal(bogus.ok, false);
+  assert.ok(bogus.problems.some((p) => p.includes('protocol')));
 
   await updateConfig({ judge: { provider: 'gateway' } });
 });
 
 test('对外配置视图里所有渠道的密钥都是掩码', () => {
   const view = publicConfig();
+  // 不变量：填了密钥就只能看到掩码，没填就是空的
+  for (const [id, p] of Object.entries(view.judge.providers)) {
+    assert.equal(p.apiKey, p.apiKeySet ? SECRET_MASK : '', `${id} 的密钥必须掩码`);
+  }
   assert.equal(view.judge.providers.gateway.apiKey, SECRET_MASK);
   assert.equal(view.judge.providers.typesafe.apiKey, SECRET_MASK);
-  assert.equal(view.judge.providers.gateway.apiKeySet, true);
-  assert.equal(view.judge.providers.openai.apiKey, '');
-  assert.equal(view.judge.providers.openai.apiKeySet, false);
+  assert.equal(view.judge.providers.custom.protocol, 'gateway', '第三方转发要带上协议');
 
   const json = JSON.stringify(view);
   assert.ok(!json.includes('gateway-key'), '明文不能出现在对外视图里');
   assert.ok(!json.includes('typesafe-key'), '明文不能出现在对外视图里');
+  assert.ok(!json.includes('relay-key'), '明文不能出现在对外视图里');
   assert.ok(!json.includes('abcd1234'));
 });
 
@@ -164,6 +184,32 @@ test('旧配置（judge.apiKey / judge.model）会自动迁移到 gateway 渠道
   assert.equal(c.judge.provider, 'gateway');
   assert.equal(c.judge.providers.gateway.apiKey, 'legacy-key');
   assert.equal(c.judge.providers.gateway.model, 'typesafe-ai/jev-latest');
+  assert.deepEqual(problems, []);
+});
+
+test('第三方转发：老配置（填了 Base URL 但没写协议）按 AI Gateway 协议迁移', () => {
+  const problems = [];
+  const c = coerceConfig(
+    { judge: { provider: 'custom', providers: { custom: { baseURL: 'https://old.example.com', model: 'typesafe-ai/jev' } } } },
+    problems,
+  );
+  assert.equal(c.judge.providers.custom.protocol, 'gateway');
+  assert.deepEqual(problems, []);
+
+  // 全新配置（没填 Base URL）用默认协议，并把该协议的默认模型带上
+  const fresh = coerceConfig({}, []);
+  assert.equal(fresh.judge.providers.custom.protocol, 'typesafe');
+  assert.equal(fresh.judge.providers.custom.model, 'jev-latest');
+});
+
+test('旧配置里的 LLM 渠道会被丢弃，不会报错', () => {
+  const problems = [];
+  const c = coerceConfig(
+    { judge: { provider: 'gateway', providers: { openai: { apiKey: 'sk-x', model: 'gpt-5' }, gateway: { apiKey: 'g' } } } },
+    problems,
+  );
+  assert.equal(c.judge.providers.openai, undefined);
+  assert.deepEqual(Object.keys(c.judge.providers), ['gateway', 'typesafe', 'custom']);
   assert.deepEqual(problems, []);
 });
 

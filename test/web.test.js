@@ -106,16 +106,26 @@ test('概览返回三条通道状态与评判渠道可用性', async () => {
   assert.ok(!r.raw.includes('apiKey'), '概览里不应带原始渠道配置');
 });
 
-test('评判渠道清单带依赖安装状态', async () => {
+test('评判渠道清单只给 Jev 入口，并带依赖与协议信息', async () => {
   const r = await call('/api/judge/providers');
   assert.equal(r.status, 200);
-  const ids = r.data.providers.map((p) => p.id);
-  assert.ok(ids.includes('gateway'));
-  assert.ok(ids.includes('typesafe'));
+  assert.deepEqual(r.data.providers.map((p) => p.id), ['gateway', 'typesafe', 'custom']);
   const gateway = r.data.providers.find((p) => p.id === 'gateway');
   assert.equal(gateway.installed, true, '内置渠道应显示已安装');
   assert.ok(gateway.label);
   assert.ok(gateway.note);
+
+  // 第三方转发：两个协议各自带依赖状态和默认模型
+  const custom = r.data.providers.find((p) => p.id === 'custom');
+  assert.equal(custom.defaultProtocol, 'typesafe');
+  assert.equal(custom.requiresBaseURL, true);
+  assert.deepEqual(custom.protocols.map((p) => p.id), ['typesafe', 'gateway']);
+  for (const p of custom.protocols) {
+    assert.ok(p.pkg);
+    assert.ok(p.defaultModel);
+    assert.equal(typeof p.installed, 'boolean');
+  }
+
   // readiness 只暴露"能不能用"，不带原始配置
   assert.equal(r.data.readiness.ready, true);
   assert.equal(r.data.readiness.model, 'typesafe-ai/jev');

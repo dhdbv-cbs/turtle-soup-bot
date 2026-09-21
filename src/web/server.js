@@ -182,7 +182,16 @@ export function createAdminApp({ runtime, questionStore }) {
           requiresBaseURL: !!p.requiresBaseURL,
           apiKeyOptional: !!p.apiKeyOptional,
           supportsBaseURL: !!p.supportsBaseURL,
-          installed: !!installed[p.id],
+          installed: !!installed[p.id]?.installed,
+          // 第三方转发这类渠道可以选协议（TypeSafe / AI Gateway）
+          protocols: (p.protocols ?? []).map((t) => ({
+            id: t.id,
+            label: t.label,
+            pkg: t.pkg,
+            defaultModel: t.defaultModel,
+            installed: !!installed[p.id]?.protocols?.[t.id],
+          })),
+          defaultProtocol: p.defaultProtocol || '',
         })),
       });
     } catch (e) {

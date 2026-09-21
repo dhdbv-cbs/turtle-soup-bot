@@ -85,17 +85,21 @@ async function bootUi({ state, routes, hash = '' }) {
 // 评判渠道接口的桩数据
 const PROVIDERS_FIXTURE = {
   active: 'gateway',
-  readiness: { ready: true, meta: { label: 'Vercel AI Gateway' } },
+  readiness: { ready: true, provider: 'gateway', label: 'Vercel AI Gateway', model: 'typesafe-ai/jev' },
   providers: [
     { id: 'gateway', label: 'Vercel AI Gateway', pkg: '@ai-sdk/gateway', installed: true, supportsBaseURL: true,
       defaultModel: 'typesafe-ai/jev', modelExample: 'typesafe-ai/jev', apiKeyEnv: 'AI_GATEWAY_API_KEY',
-      note: '官方网关，内置依赖开箱可用', home: 'https://vercel.com/docs/ai-gateway' },
-    { id: 'typesafe', label: 'TypeSafe 官方直连', pkg: '@ai-sdk/typesafe-ai', installed: true, supportsBaseURL: true,
+      note: '官方网关，内置依赖开箱可用', home: 'https://vercel.com/docs/ai-gateway', protocols: [] },
+    { id: 'typesafe', label: 'TypeSafe 官方直连', pkg: '@ai-sdk/typesafe-ai', installed: false, supportsBaseURL: true,
       defaultModel: 'jev-latest', modelExample: 'jev-latest', apiKeyEnv: 'TYPESAFE_API_KEY',
-      note: 'TypeSafe 自家 API', home: 'https://docs.typesafe.ai' },
-    { id: 'custom', label: '其他网关（自建 / 代理）', pkg: '@ai-sdk/gateway', installed: false, supportsBaseURL: true,
-      requiresBaseURL: true, apiKeyOptional: true, defaultModel: '', modelExample: 'typesafe-ai/jev',
-      note: '自建网关必须填 Base URL', home: 'https://vercel.com/docs/ai-gateway' },
+      note: 'TypeSafe 自家 API', home: 'https://docs.typesafe.ai', protocols: [] },
+    { id: 'custom', label: '第三方转发（Jev）', installed: true, supportsBaseURL: true, requiresBaseURL: true,
+      defaultModel: 'jev-latest', modelExample: 'jev-latest', apiKeyEnv: '', defaultProtocol: 'typesafe',
+      note: '第三方中转的 Jev 服务', home: 'https://docs.typesafe.ai',
+      protocols: [
+        { id: 'typesafe', label: 'TypeSafe 直连协议（api.typesafe.ai 风格）', pkg: '@ai-sdk/typesafe-ai', defaultModel: 'jev-latest', installed: true },
+        { id: 'gateway', label: 'AI Gateway 协议（/v4/ai 风格）', pkg: '@ai-sdk/gateway', defaultModel: 'typesafe-ai/jev', installed: false },
+      ] },
   ],
 };
 
@@ -112,7 +116,7 @@ function judgeConfigFixture() {
         providers: {
           gateway: { apiKey: '••••••••', apiKeySet: true, baseURL: '', model: 'typesafe-ai/jev' },
           typesafe: { apiKey: '', apiKeySet: false, baseURL: '', model: 'jev-latest' },
-          custom: { apiKey: '', apiKeySet: false, baseURL: '', model: '' },
+          custom: { apiKey: '', apiKeySet: false, baseURL: '', model: 'jev-latest', protocol: 'typesafe' },
         },
       },
       discord: { enabled: false, helpText: '', token: '', tokenSet: false },
@@ -231,7 +235,7 @@ test('评判页用抽屉列表，默认全部收起', async () => {
   // 三个渠道都列出来了，但抽屉是收起的（没有展开体）
   assert.match(html, /Vercel AI Gateway/);
   assert.match(html, /TypeSafe 官方直连/);
-  assert.match(html, /其他网关/);
+  assert.match(html, /第三方转发/);
   assert.equal((html.match(/drawer-body/g) || []).length, 0, '默认不应展开任何抽屉');
 
   // 当前生效的渠道有标记，没装依赖的渠道被标注出来
@@ -240,8 +244,9 @@ test('评判页用抽屉列表，默认全部收起', async () => {
   // 表头显示的是该渠道当前的模型
   assert.match(html, /typesafe-ai\/jev/);
 
-  // 旧的"前缀"配置项应该彻底消失
+  // 旧的"前缀"配置项应该彻底消失，也不再出现 LLM 渠道
   assert.doesNotMatch(html, /命令前缀/);
+  assert.doesNotMatch(html, /OpenAI|Anthropic|Claude|Gemini/);
 });
 
 test('抽屉可以通过锚点直接展开，并显示该渠道的字段', async () => {
@@ -263,7 +268,7 @@ test('抽屉可以通过锚点直接展开，并显示该渠道的字段', async
   assert.match(html, /TYPESAFE_API_KEY/, '应提示可以用环境变量');
 });
 
-test('依赖没装的渠道：按钮禁用并给出安装命令', async () => {
+test('第三方转发：可以选协议，没装依赖的协议会提示安装命令', async () => {
   const ui = await bootUi({
     state: { needsSetup: false, authenticated: true, version: '1.0.0' },
     hash: '#judge/custom',
@@ -275,7 +280,26 @@ test('依赖没装的渠道：按钮禁用并给出安装命令', async () => {
   });
 
   const html = ui.html();
-  assert.match(html, /data-use-provider="custom" disabled/);
-  assert.match(html, /npm i @ai-sdk\/gateway/);
-  assert.match(html, /Base URL/, '自建网关需要 Base URL 字段');
+  assert.match(html, /<select[^>]*data-select="judge\.providers\.custom\.protocol"/, '应渲染协议下拉框');
+  assert.match(html, /TypeSafe 直连协议/);
+  assert.match(html, /AI Gateway 协议（\/v4\/ai 风格）（依赖未安装）/);
+  assert.match(html, /Base URL/, '第三方转发需要 Base URL 字段');
+  assert.match(html, /第三方中转的密钥/);
+  assert.doesNotMatch(html, /npm i @ai-sdk\/typesafe-ai/, '默认协议依赖已装，不该提示安装');
+});
+
+test('整个渠道都没装依赖时：按钮禁用并给出安装命令', async () => {
+  const ui = await bootUi({
+    state: { needsSetup: false, authenticated: true, version: '1.0.0' },
+    hash: '#judge/typesafe',
+    routes: {
+      '/api/overview': { channels: {}, questions: 0, uptime: 0, configProblems: [], judge: { ready: true } },
+      '/api/config': judgeConfigFixture(),
+      '/api/judge/providers': PROVIDERS_FIXTURE,
+    },
+  });
+
+  const html = ui.html();
+  assert.match(html, /npm i @ai-sdk\/typesafe-ai/);
+  assert.match(html, /data-use-provider="typesafe" disabled/);
 });

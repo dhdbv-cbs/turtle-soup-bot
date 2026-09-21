@@ -243,6 +243,16 @@ function fieldHtml(f, config) {
       ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
   }
 
+  if (f.type === 'select') {
+    const options = (f.options || [])
+      .map((o) => `<option value="${esc(o.value)}" ${String(value) === String(o.value) ? 'selected' : ''}>${esc(o.label)}</option>`)
+      .join('');
+    return `<div class="field">
+      <label>${esc(f.label)}</label>
+      <select data-field="${f.path}" id="${id}" data-select="${f.path}">${options}</select>
+      ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
+  }
+
   if (f.type === 'long') {
     return `<div class="field">
       <label>${esc(f.label)}</label>
@@ -306,26 +316,39 @@ function collectForm(name) {
 /* ---------------- 评判渠道：抽屉式 ---------------- */
 
 function providerFields(meta) {
-  const fields = [
-    {
-      path: `judge.providers.${meta.id}.apiKey`,
-      label: 'API Key',
-      type: 'secret',
-      hint: meta.apiKeyEnv
-        ? `也可以用环境变量 ${meta.apiKeyEnv}（留空即用环境变量）`
-        : meta.apiKeyOptional
-          ? '自建/本地网关可以不填'
-          : '',
-    },
-  ];
+  const fields = [];
+
+  if (meta.protocols?.length) {
+    fields.push({
+      path: `judge.providers.${meta.id}.protocol`,
+      label: '协议',
+      type: 'select',
+      options: meta.protocols.map((p) => ({
+        value: p.id,
+        label: p.installed ? p.label : `${p.label}（依赖未安装）`,
+      })),
+      hint: '按中转站兼容的协议选；换协议后模型 ID 一般也要跟着改',
+    });
+  }
+
+  fields.push({
+    path: `judge.providers.${meta.id}.apiKey`,
+    label: 'API Key',
+    type: 'secret',
+    hint: meta.apiKeyEnv
+      ? `也可以用环境变量 ${meta.apiKeyEnv}（留空即用环境变量）`
+      : '第三方中转的密钥，填中转站给你的那个',
+  });
+
   if (meta.supportsBaseURL) {
     fields.push({
       path: `judge.providers.${meta.id}.baseURL`,
       label: 'Base URL',
       type: 'text',
-      placeholder: meta.requiresBaseURL ? '必填，例如 https://gateway.example.com' : '留空使用官方地址',
+      placeholder: meta.requiresBaseURL ? '必填，例如 https://jev.example.com' : '留空使用官方地址',
     });
   }
+
   fields.push({
     path: `judge.providers.${meta.id}.model`,
     label: '模型 ID',
@@ -333,6 +356,13 @@ function providerFields(meta) {
     placeholder: meta.modelExample || 'model-id',
   });
   return fields;
+}
+
+// 选了协议就顺手把该协议的默认模型填进模型框（用户自己改过则不动）
+function protocolDefaults(meta) {
+  const map = {};
+  for (const p of meta.protocols || []) map[p.id] = p.defaultModel || '';
+  return map;
 }
 
 function providerEntry(id) {
@@ -356,18 +386,35 @@ function drawerHtml(meta) {
     configured && !active ? '<span class="tag">已配置</span>' : '',
   ].join('');
 
+  // 依赖缺失提示：带协议的渠道按协议分别提示，普通渠道提示它自己那个包
+  const missing = meta.protocols?.length
+    ? meta.protocols.filter((p) => !p.installed).map((p) => ({ label: p.label, pkg: p.pkg }))
+    : meta.installed
+      ? []
+      : [{ label: meta.label, pkg: meta.pkg }];
+  const currentProto = meta.protocols?.length
+    ? meta.protocols.find((p) => p.id === (entry.protocol || meta.defaultProtocol))
+    : null;
+  // 整个渠道一个包都没有 → 不让保存；带协议的渠道只要有一种协议可用就允许保存
+  const blocked = !meta.protocols?.length && !meta.installed;
+
   const body = open
     ? `<div class="drawer-body">
-        ${!meta.installed
-          ? `<div class="problems">这个渠道需要先安装依赖：<code>npm i ${esc(meta.pkg)}</code></div>`
+        ${missing.length
+          ? `<div class="problems">${missing
+              .map((m) => `「${esc(m.label)}」需要先安装依赖：<code>npm i ${esc(m.pkg)}</code>`)
+              .join('<br>')}</div>`
+          : ''}
+        ${currentProto && !currentProto.installed
+          ? `<div class="problems">当前选的协议依赖还没装：<code>npm i ${esc(currentProto.pkg)}</code>，先切到上面那个已装好的协议，或者装上再保存。</div>`
           : ''}
         <div class="sub">${esc(meta.note)}${meta.home ? ` · <a href="${esc(meta.home)}" target="_blank" rel="noreferrer">官方文档</a>` : ''}</div>
         ${providerFields(meta).map((f) => fieldHtml(f, state.config || {})).join('')}
         <div class="actions">
-          <button class="primary" data-use-provider="${meta.id}" ${meta.installed ? '' : 'disabled'}>
+          <button class="primary" data-use-provider="${meta.id}" ${blocked ? 'disabled' : ''}>
             ${active ? '保存' : '保存并切换到该渠道'}
           </button>
-          ${active ? '' : `<button data-save-provider="${meta.id}" ${meta.installed ? '' : 'disabled'}>仅保存</button>`}
+          ${active ? '' : `<button data-save-provider="${meta.id}" ${blocked ? 'disabled' : ''}>仅保存</button>`}
         </div>
         <div class="hint">切换后立即生效，正在进行的游戏不受影响。</div>
       </div>`
@@ -394,7 +441,7 @@ function judgeHtml() {
   return `${problemsHtml()}
     <div class="card">
       <h2>当前评判渠道</h2>
-      <div class="sub">判断「是/不是」并计算与谜底的相似度。所有渠道走 AI SDK 同一套评判接口，切换渠道不需要重装任何东西。</div>
+      <div class="sub">判断「是/不是」并计算与谜底的相似度。三个入口都走 AI SDK 同一套评判接口，切换时不需要重装任何东西。</div>
       <div class="chan">
         ${statusLine}
         <div class="detail">${esc(activeMeta?.note || '')}</div>
@@ -404,7 +451,7 @@ function judgeHtml() {
 
     <div class="card">
       <h2>可选的评判渠道</h2>
-      <div class="sub">提供 Jev 的平台：Vercel AI Gateway、TypeSafe 官方直连（Netlify 的网关只能在 Netlify 里用）。另外 OpenAI / Anthropic / Google 也能完成同样的评判，只是模型不是 Jev。</div>
+      <div class="sub">评判只用 Jev（System One 模型），不接普通 LLM。可用的入口：Vercel AI Gateway、TypeSafe 官方直连、以及第三方转发的 Jev。</div>
       ${state.providers.length ? state.providers.map(drawerHtml).join('') : '<div class="muted">加载中…</div>'}
     </div>
 
@@ -623,6 +670,23 @@ function bindApp() {
   });
   root.querySelectorAll('[data-save-params]').forEach((el) => {
     el.addEventListener('click', saveJudgeParams);
+  });
+
+  // 换协议时，把该协议的默认模型填进模型框（用户已经改过就不动）
+  root.querySelectorAll('[data-select]').forEach((el) => {
+    el.addEventListener('change', () => {
+      const meta = state.providers.find((p) => `judge.providers.${p.id}.protocol` === el.dataset.select);
+      if (!meta) return;
+      const input = root.querySelector(`[data-field="judge.providers.${meta.id}.model"]`);
+      const defaults = protocolDefaults(meta);
+      if (!input) return;
+      const current = input.value.trim();
+      const known = Object.values(defaults).includes(current);
+      if (current === '' || known) {
+        input.value = defaults[el.value] || '';
+        input.placeholder = defaults[el.value] || 'model-id';
+      }
+    });
   });
 
   root.querySelectorAll('[data-clear]').forEach((el) => {

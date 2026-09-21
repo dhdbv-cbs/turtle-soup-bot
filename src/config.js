@@ -11,7 +11,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROVIDER_IDS, defaultProviderEntries, providerMeta } from './judge/providers.js';
-import { isPlaceholder } from './utils/placeholder.js';
+import { isPlaceholder, stripBom } from './utils/strings.js';
 import { error, log, warn } from './utils/logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -165,6 +165,24 @@ export function coerceConfig(raw, problems = []) {
       problems.push(`judge.providers.${id}.baseURL 必须以 http:// 或 https:// 开头`);
       entry.baseURL = '';
     }
+
+    // 带多协议的渠道（第三方转发）：校验协议名
+    const meta = providerMeta(id);
+    if (meta?.protocols?.length) {
+      const allowed = meta.protocols.map((p) => p.id);
+      // 老配置里的第三方转发走的是 AI Gateway 协议，没写协议名时按老行为迁移
+      const fallback = src.baseURL && !src.protocol ? meta.legacyProtocol || meta.defaultProtocol : meta.defaultProtocol;
+      const wanted = typeof src.protocol === 'string' && src.protocol ? src.protocol : fallback;
+      if (!allowed.includes(wanted)) {
+        problems.push(`judge.providers.${id}.protocol 只能是 ${allowed.join(' / ')}，当前值：${wanted}`);
+        entry.protocol = meta.defaultProtocol;
+      } else {
+        entry.protocol = wanted;
+        // 协议跟着换时，模型默认值也跟着换（用户自己填过就不动）
+        const pDef = meta.protocols.find((p) => p.id === wanted);
+        if (!src.model && pDef?.defaultModel) entry.model = pDef.defaultModel;
+      }
+    }
   }
   const wantedProvider = c.str(j.provider, def.judge.provider, 'judge.provider');
   if (!PROVIDER_IDS.includes(wantedProvider)) {
@@ -307,7 +325,8 @@ export async function loadConfig() {
   if (existsSync(CONFIG_FILE)) {
     let raw;
     try {
-      raw = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
+      // 记事本等编辑器会写 UTF-8 BOM，这里先去掉，别当成"配置损坏"
+      raw = JSON.parse(stripBom(await readFile(CONFIG_FILE, 'utf8')));
     } catch (e) {
       const backup = `${CONFIG_FILE}.corrupt-${Date.now()}.bak`;
       try {
@@ -357,15 +376,15 @@ export function publicConfig() {
       providers: Object.fromEntries(
         PROVIDER_IDS.map((id) => {
           const entry = c.judge.providers[id] ?? {};
-          return [
-            id,
-            {
-              apiKey: entry.apiKey ? SECRET_MASK : '',
-              apiKeySet: !!entry.apiKey,
-              baseURL: entry.baseURL || '',
-              model: entry.model || '',
-            },
-          ];
+          const meta = providerMeta(id);
+          const view = {
+            apiKey: entry.apiKey ? SECRET_MASK : '',
+            apiKeySet: !!entry.apiKey,
+            baseURL: entry.baseURL || '',
+            model: entry.model || '',
+          };
+          if (meta?.protocols?.length) view.protocol = entry.protocol || meta.defaultProtocol;
+          return [id, view];
         }),
       ),
     },
@@ -439,6 +458,7 @@ export async function updateConfig(patch) {
     if (!isPlainObject(incoming) || !isPlainObject(next.judge.providers[id])) continue;
     set(next.judge.providers[id], 'model', incoming.model);
     set(next.judge.providers[id], 'baseURL', incoming.baseURL);
+    set(next.judge.providers[id], 'protocol', incoming.protocol);
   }
 
   set(next.discord, 'enabled', p.discord?.enabled);

@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log, warn, error } from '../utils/logger.js';
+import { stripBom } from '../utils/strings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DATA_FILE = join(__dirname, '..', '..', 'data', 'questions.json');
@@ -55,7 +56,9 @@ export class QuestionStore {
     }
 
     try {
-      const data = raw.trim() === '' ? [] : JSON.parse(raw);
+      // 去掉记事本可能写入的 BOM，空文件按空库处理
+      const text = stripBom(raw);
+      const data = text.trim() === '' ? [] : JSON.parse(text);
       const list = Array.isArray(data) ? data : data?.questions;
       if (!Array.isArray(list)) {
         throw new Error('顶层结构必须是题目数组，或 { "questions": [...] }');
