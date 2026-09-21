@@ -5,6 +5,7 @@
 import WebSocket from 'ws';
 import { config } from '../config.js';
 import { formatAskResult } from './format.js';
+import { proxyWebSocketAgent } from '../proxy.js';
 import { log, error, warn } from '../utils/logger.js';
 
 export function startOneBot(handler) {
@@ -23,7 +24,8 @@ export function startOneBot(handler) {
   function connect() {
     if (stopped) return;
     const headers = ACCESS_TOKEN ? { Authorization: `Bearer ${ACCESS_TOKEN}` } : {};
-    ws = new WebSocket(WS_URL, { headers });
+    // ws 不走 http(s).globalAgent，要用代理得显式传 agent（本机地址默认直连）
+    ws = new WebSocket(WS_URL, { headers, agent: proxyWebSocketAgent(WS_URL) });
 
     ws.on('open', () => {
       status.state = 'connected';

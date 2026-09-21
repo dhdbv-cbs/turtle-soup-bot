@@ -1,5 +1,6 @@
 // 入口：启动后台界面 + 三条消息通道
 import { config, configProblems, hasPassword, loadConfig } from './config.js';
+import { applyProxy } from './proxy.js';
 import { QuestionStore } from './game/QuestionStore.js';
 import { JevJudge } from './game/JevJudge.js';
 import { GameManager } from './game/GameManager.js';
@@ -25,6 +26,14 @@ async function main() {
   // 1. 配置（首次运行会根据 .env / 默认值生成 data/config.json，之后都在后台界面里改）
   await loadConfig();
   for (const p of configProblems) warn(`配置：${p}`);
+
+  // 1.5 出站代理：必须在任何通道/评判请求之前装好
+  const proxy = applyProxy(config.proxy);
+  if (proxy.active) {
+    log(`出站代理已启用：${proxy.url}（不走代理：${proxy.bypass || '—'}）`);
+  } else if (proxy.error) {
+    warn(`代理没有生效：${proxy.error}`);
+  }
 
   // 2. 题目库
   const questions = new QuestionStore();

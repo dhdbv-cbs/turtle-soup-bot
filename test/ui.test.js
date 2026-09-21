@@ -199,6 +199,76 @@ test('已登录时渲染主界面与通道状态', async () => {
   assert.ok(ui.calls.includes('/api/config'));
 });
 
+test('概览页带「网络代理」表单：地址、密码占位、当前生效状态', async () => {
+  const base = {
+    '/api/overview': {
+      version: '9.9.9',
+      uptime: 12,
+      configFile: '/tmp/config.json',
+      configProblems: [],
+      appliedAt: null,
+      questions: 1,
+      channels: {},
+    },
+    '/api/config': {
+      problems: [],
+      config: {
+        admin: { host: '127.0.0.1', port: 4319, hasPassword: true },
+        judge: { provider: 'gateway', winThreshold: 0.8, yesThreshold: 0.5, providers: {} },
+        discord: { enabled: false, helpText: '', token: '', tokenSet: false },
+        qq: {
+          napcat: { enabled: false, wsUrl: 'ws://127.0.0.1:3001', helpText: '', accessToken: '', accessTokenSet: false },
+          official: { enabled: false, appId: '', sandbox: true, helpText: '', guildMessages: false, appSecret: '', appSecretSet: false },
+        },
+        proxy: {
+          enabled: true,
+          url: 'http://127.0.0.1:7890',
+          username: '',
+          bypass: 'localhost,127.0.0.1',
+          password: '••••••••',
+          passwordSet: true,
+        },
+      },
+    },
+  };
+
+  // 已启用且生效
+  const on = await bootUi({
+    state: { needsSetup: false, authenticated: true, passwordMinLength: 6, version: '9.9.9' },
+    routes: {
+      ...base,
+      '/api/overview': {
+        ...base['/api/overview'],
+        proxy: { enabled: true, active: true, url: 'http://127.0.0.1:7890', bypass: 'localhost, 127.0.0.1', error: null },
+      },
+    },
+  });
+  const html = on.html();
+  assert.match(html, /网络代理（出站）/);
+  assert.match(html, /data-form="proxy"/);
+  assert.match(html, /data-field="proxy\.enabled"[^>]*checked/, '启用勾选状态要跟着配置走');
+  assert.match(html, /data-field="proxy\.url"[^>]*value="http:\/\/127\.0\.0\.1:7890"/, '代理地址要填好');
+  assert.match(html, /data-field="proxy\.bypass"/);
+  assert.match(html, /data-clear="proxy\.password"/, '已设置的代理密码给一个清除按钮');
+  assert.match(html, /placeholder="已设置（留空表示不修改）"/);
+  assert.match(html, /已生效/);
+  assert.ok(on.calls.includes('/api/config'), '概览页也要拉配置来填表单');
+
+  // 地址非法时的提示
+  const bad = await bootUi({
+    state: { needsSetup: false, authenticated: true, passwordMinLength: 6, version: '9.9.9' },
+    routes: {
+      ...base,
+      '/api/overview': {
+        ...base['/api/overview'],
+        proxy: { enabled: true, active: false, url: 'socks5://127.0.0.1:7890', bypass: '', error: '只支持 HTTP/HTTPS 代理' },
+      },
+    },
+  });
+  assert.match(bad.html(), /未生效/);
+  assert.match(bad.html(), /只支持 HTTP\/HTTPS 代理/);
+});
+
 test('界面脚本不引用未定义的全局变量（在桩环境里能跑完）', async () => {
   // 这里主要确保 esc() 之类的工具在缺字段时也不会抛错；
   // /api/overview 与 /api/config 的 problems 来自同一个来源，桩数据保持一致

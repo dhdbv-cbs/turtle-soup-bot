@@ -11,6 +11,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROVIDER_IDS, defaultProviderEntries, providerMeta } from './judge/providers.js';
+import { DEFAULT_BYPASS, normalizeProxyUrl, parseProxyUrl } from './proxy.js';
 import { isPlaceholder, stripBom } from './utils/strings.js';
 import { error, log, warn } from './utils/logger.js';
 
@@ -37,6 +38,15 @@ export function defaultConfig() {
       providers: defaultProviderEntries(),
       winThreshold: 0.8,
       yesThreshold: 0.5,
+    },
+    // 出站网络代理：Node 不会用系统代理，填了这里评判 / Discord / QQ 官方才会走代理
+    proxy: {
+      enabled: false,
+      url: 'http://127.0.0.1:7890',
+      username: '',
+      password: '',
+      // 这些地址直连（逗号分隔，支持 *.example.com）
+      bypass: DEFAULT_BYPASS,
     },
     discord: {
       enabled: false,
@@ -199,6 +209,33 @@ export function coerceConfig(raw, problems = []) {
   out.judge.winThreshold = c.num(j.winThreshold, def.judge.winThreshold, 'judge.winThreshold', 0, 1);
   out.judge.yesThreshold = c.num(j.yesThreshold, def.judge.yesThreshold, 'judge.yesThreshold', 0, 1);
 
+  // proxy：出站代理
+  const px = isPlainObject(r.proxy) ? r.proxy : {};
+  out.proxy.enabled = c.bool(px.enabled, def.proxy.enabled, 'proxy.enabled');
+  // 这里不用 c.str：空字符串代表"用户清空了地址"，不是"用默认值"
+  if (px.url === undefined || px.url === null) {
+    out.proxy.url = def.proxy.url;
+  } else if (typeof px.url === 'string') {
+    out.proxy.url = px.url.trim();
+  } else {
+    problems.push('proxy.url 必须是字符串');
+    out.proxy.url = def.proxy.url;
+  }
+  out.proxy.username = c.str(px.username, '', 'proxy.username') ?? '';
+  out.proxy.password = c.str(px.password, '', 'proxy.password') ?? '';
+  out.proxy.bypass = typeof px.bypass === 'string' ? px.bypass.trim() : def.proxy.bypass;
+  if (out.proxy.url) {
+    try {
+      out.proxy.url = parseProxyUrl(out.proxy.url).href.replace(/\/$/, '');
+    } catch (e) {
+      problems.push(`proxy.url 不可用：${e.message}`);
+      out.proxy.url = normalizeProxyUrl(out.proxy.url);
+    }
+  }
+  if (out.proxy.enabled && !out.proxy.url) {
+    problems.push('启用代理时必须填写 proxy.url（例如 http://127.0.0.1:7890）');
+  }
+
   // discord
   const d = isPlainObject(r.discord) ? r.discord : {};
   out.discord.enabled = c.bool(d.enabled, def.discord.enabled, 'discord.enabled');
@@ -276,6 +313,14 @@ function seedFromEnv() {
     discord: {
       enabled: bool('DISCORD_ENABLED'),
       token: secret('DISCORD_TOKEN'),
+    },
+    // .env 里写了 PROXY_URL 就等于启用代理
+    proxy: {
+      enabled: str('PROXY_URL') ? true : bool('PROXY_ENABLED'),
+      url: str('PROXY_URL'),
+      username: str('PROXY_USERNAME'),
+      password: secret('PROXY_PASSWORD'),
+      bypass: str('PROXY_BYPASS'),
     },
     qq: {
       napcat: {
@@ -416,6 +461,14 @@ export function publicConfig() {
       token: c.discord.token ? SECRET_MASK : '',
       tokenSet: !!c.discord.token,
     },
+    proxy: {
+      enabled: c.proxy.enabled,
+      url: c.proxy.url,
+      username: c.proxy.username,
+      bypass: c.proxy.bypass,
+      password: c.proxy.password ? SECRET_MASK : '',
+      passwordSet: !!c.proxy.password,
+    },
     qq: {
       napcat: {
         enabled: c.qq.napcat.enabled,
@@ -457,6 +510,7 @@ export async function updateConfig(patch) {
   applySecret(next.discord, 'token', p.discord?.token);
   applySecret(next.qq.napcat, 'accessToken', p.qq?.napcat?.accessToken);
   applySecret(next.qq.official, 'appSecret', p.qq?.official?.appSecret);
+  applySecret(next.proxy, 'password', p.proxy?.password);
 
   // judge 的每个渠道各有一份 apiKey，语义同样是"留空保持、null 清空"
   for (const id of PROVIDER_IDS) {
@@ -485,6 +539,11 @@ export async function updateConfig(patch) {
 
   set(next.discord, 'enabled', p.discord?.enabled);
   set(next.discord, 'helpText', p.discord?.helpText);
+
+  set(next.proxy, 'enabled', p.proxy?.enabled);
+  set(next.proxy, 'url', p.proxy?.url);
+  set(next.proxy, 'username', p.proxy?.username);
+  set(next.proxy, 'bypass', p.proxy?.bypass);
 
   set(next.qq.napcat, 'enabled', p.qq?.napcat?.enabled);
   set(next.qq.napcat, 'wsUrl', p.qq?.napcat?.wsUrl);

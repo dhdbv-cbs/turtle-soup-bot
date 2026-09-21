@@ -168,8 +168,35 @@ test('配置接口返回掩码后的密钥', async () => {
   assert.ok(!r.raw.includes('vck_should_not_leak'), '响应里不能出现密钥明文');
 });
 
-test('/api/config 一并返回三个渠道的内置 /help 文案（后台直接填好，不用自己写）', async () => {
-  const r = await call('/api/config');
+test('代理配置：地址会补协议、密码只回掩码，保存后概览里能看到状态', async () => {
+  const r = await call('/api/config', {
+    method: 'PUT',
+    body: { proxy: { enabled: true, url: '127.0.0.1:7890', username: 'u', password: 'proxy-pw' } },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.config.proxy.url, 'http://127.0.0.1:7890', '缺协议要自动补 http://');
+  assert.equal(r.data.config.proxy.password, '••••••••');
+  assert.equal(r.data.config.proxy.passwordSet, true);
+  assert.equal(r.data.config.proxy.bypass, 'localhost,127.0.0.1,::1,0.0.0.0');
+  assert.ok(!r.raw.includes('proxy-pw'), '响应里不能出现代理密码明文');
+  assert.equal(config.proxy.password, 'proxy-pw', '真实配置里要存下来');
+  // 保存后就地生效，响应里带上代理状态
+  assert.equal(r.data.proxy.active, true);
+  assert.equal(r.data.proxy.url, 'http://127.0.0.1:7890');
+
+  const ov = await call('/api/overview');
+  assert.equal(ov.data.proxy.active, true);
+  assert.equal(ov.data.proxy.url, 'http://127.0.0.1:7890');
+  assert.equal(ov.data.proxy.error, null);
+
+  const off = await call('/api/config', { method: 'PUT', body: { proxy: { enabled: false } } });
+  assert.equal(off.data.proxy.enabled, false);
+  assert.equal(off.data.proxy.active, false, '关掉后要把全局 dispatcher 还原');
+  const ov2 = await call('/api/overview');
+  assert.equal(ov2.data.proxy.active, false);
+});
+
+test('/api/config 一并返回三个渠道的内置 /help 文案（后台直接填好，不用自己写）', async () => {  const r = await call('/api/config');
   assert.equal(r.status, 200);
   const d = r.data.helpDefaults;
   assert.ok(d, '应返回 helpDefaults');

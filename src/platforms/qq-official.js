@@ -17,6 +17,7 @@
 import WebSocket from 'ws';
 import { config } from '../config.js';
 import { formatAskResult } from './format.js';
+import { proxyWebSocketAgent } from '../proxy.js';
 import { log, error, warn } from '../utils/logger.js';
 
 const TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken';
@@ -356,7 +357,8 @@ export function startQqOfficial(handler) {
     try {
       const url = await getGatewayUrl();
       if (stopped) return;
-      ws = new WebSocket(url);
+      // ws 不走 http(s).globalAgent，要用代理得显式传 agent
+      ws = new WebSocket(url, { agent: proxyWebSocketAgent(url) });
       ws.on('open', () => {
         status.detail = '已连接网关，等待 Hello';
       });

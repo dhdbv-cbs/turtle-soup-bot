@@ -3,6 +3,7 @@ import { Client, GatewayIntentBits, MessageFlags, Partials } from 'discord.js';
 import { config } from '../config.js';
 import { COMMANDS, isEphemeralCommand } from '../commands.js';
 import { formatAskResult } from './format.js';
+import { proxyRestAgent } from '../proxy.js';
 import { log, error, warn } from '../utils/logger.js';
 
 // 把共享命令表转成 Discord 应用命令（type: 3 = STRING, 4 = INTEGER）
@@ -29,6 +30,8 @@ export async function startDiscord(handler) {
       GatewayIntentBits.DirectMessages,
     ],
     partials: [Partials.Channel],
+    // REST 不认全局 dispatcher（@discordjs/rest 用的是自己那份 undici），得显式给
+    rest: { agent: proxyRestAgent() },
   });
 
   // 真正的 @：Discord 会把它显示成对方的用户名

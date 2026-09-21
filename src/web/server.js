@@ -16,6 +16,7 @@ import {
   verifyPassword,
 } from '../config.js';
 import { PROVIDERS, installedMap, judgeReadiness } from '../judge/providers.js';
+import { applyProxy, proxySummary } from '../proxy.js';
 import { defaultHelpText } from '../commands.js';
 import { error, log, warn } from '../utils/logger.js';
 
@@ -171,6 +172,7 @@ export function createAdminApp({ runtime, questionStore, games = null }) {
       channels: runtime.status(),
       questions: questionStore.count,
       judge: { ...publicJudgeStatus(), ...judgeLoad(games) },
+      proxy: proxySummary(),
     });
   });
 
@@ -238,6 +240,11 @@ export function createAdminApp({ runtime, questionStore, games = null }) {
       if (!result.ok) {
         return res.status(400).json({ ok: false, problems: result.problems, config: result.config });
       }
+      // 代理是进程级的，先按新配置装/卸，再热重启通道（通道连接会用到它）
+      const proxy = applyProxy(config.proxy);
+      if (proxy.error) warn(`代理没有生效：${proxy.error}`);
+      else if (proxy.active) log(`出站代理已启用：${proxy.url}`);
+
       // 配置变了就按新配置热重启通道，但不阻塞本次响应
       runtime.apply().catch((e) => error('通道热重启失败：', e?.message || String(e)));
       log('配置已更新，正在按新配置重启通道');
@@ -245,6 +252,7 @@ export function createAdminApp({ runtime, questionStore, games = null }) {
         ok: true,
         problems: [],
         config: result.config,
+        proxy,
         note: '已保存，正在按新配置重启通道（监听地址与端口需重启进程才生效）',
       });
     } catch (e) {

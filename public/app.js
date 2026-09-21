@@ -208,6 +208,30 @@ const FORMS = {
       { path: 'admin.port', label: '监听端口', type: 'number', min: '1', max: '65535' },
     ],
   },
+  proxy: {
+    title: '网络代理（出站）',
+    sub:
+      'Node 不会自动使用 Windows 的系统代理：浏览器能打开 Discord/评判接口，机器人却会直连失败（典型报错 ' +
+      'connect ECONNREFUSED 127.0.0.1:443）。在这里填上本地代理，机器人的出站请求就会走它。',
+    fields: [
+      { path: 'proxy.enabled', label: '启用代理', type: 'bool' },
+      {
+        path: 'proxy.url',
+        label: '代理地址',
+        type: 'text',
+        placeholder: 'http://127.0.0.1:7890',
+        hint: 'HTTP/HTTPS 代理（Clash / FlClash 的混合端口就是 HTTP 代理）。SOCKS5 不受支持，请改用 TUN 模式',
+      },
+      { path: 'proxy.username', label: '代理用户名', type: 'text', hint: '代理不需要认证就留空' },
+      { path: 'proxy.password', label: '代理密码', type: 'secret' },
+      {
+        path: 'proxy.bypass',
+        label: '不走代理的地址',
+        type: 'text',
+        hint: '逗号分隔，支持 *.example.com 通配。默认 localhost,127.0.0.1,::1,0.0.0.0（NapCat 装在本机时别把它绕出去）；留空表示所有地址都走代理',
+      },
+    ],
+  },
 };
 
 // 评判参数（渠道本身在抽屉里配置）
@@ -277,13 +301,14 @@ function fieldHtml(f, config) {
     ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
 }
 
-function formCard(name) {
+function formCard(name, { extra = '' } = {}) {
   const spec = FORMS[name];
   const config = state.config || {};
   const body = spec.fields.map((f) => fieldHtml(f, config)).join('');
   return `<div class="card" data-form="${name}">
     <h2>${esc(spec.title)}</h2>
     <div class="sub">${esc(spec.sub)}</div>
+    ${extra}
     ${body}
     <div class="actions"><button class="primary" data-save="${name}">保存${esc(spec.title.split('（')[0])}</button></div>
   </div>`;
@@ -564,6 +589,20 @@ function overviewHtml() {
       </div>
     </div>`).join('');
 
+  const px = ov.proxy || {};
+  const pxTag = px.active
+    ? `<span class="tag on">已生效</span>`
+    : px.error
+      ? `<span class="tag warn">未生效</span>`
+      : `<span class="tag">未启用</span>`;
+  const proxyCard = `${formCard('proxy', {
+    extra: `<div class="hint" style="margin-bottom:12px">
+        当前状态：${pxTag} ${px.active ? esc(px.url || '') : px.error ? esc(px.error) : '所有出站请求直连'}
+        ${px.active && px.bypass ? `<br>直连地址：${esc(px.bypass)}` : ''}
+        <br>生效范围：评判请求、Discord（REST 与网关）、QQ 官方机器人（REST 与网关）、远程 NapCat。
+      </div>`,
+  })}`;
+
   return `${problemsHtml()}
     <div class="card">
       <h2>通道状态</h2>
@@ -572,6 +611,7 @@ function overviewHtml() {
       <div class="actions"><button id="reapply">重启所有通道</button>
         <span class="hint">最近一次应用：${ov.appliedAt ? esc(new Date(ov.appliedAt).toLocaleString('zh-CN')) : '—'}</span></div>
     </div>
+    ${proxyCard}
     <div class="card">
       <h2>运行信息</h2>
       <div class="grid3">
@@ -851,7 +891,8 @@ async function loadProviders() {
 
 async function loadTabData() {
   try {
-    if (state.tab === 'overview') await loadOverview();
+    // 概览页的代表单也要用配置值，所以这里连配置一起刷新
+    if (state.tab === 'overview') await Promise.all([loadOverview(), loadConfig()]);
     else if (state.tab === 'questions') await loadQuestions();
     else if (state.tab === 'judge') await Promise.all([loadConfig(), loadProviders()]);
     else await loadConfig();
