@@ -168,6 +168,23 @@ test('配置接口返回掩码后的密钥', async () => {
   assert.ok(!r.raw.includes('vck_should_not_leak'), '响应里不能出现密钥明文');
 });
 
+test('/api/config 一并返回三个渠道的内置 /help 文案（后台直接填好，不用自己写）', async () => {
+  const r = await call('/api/config');
+  assert.equal(r.status, 200);
+  const d = r.data.helpDefaults;
+  assert.ok(d, '应返回 helpDefaults');
+  for (const ch of ['discord', 'napcat', 'official']) {
+    assert.ok(typeof d[ch] === 'string' && d[ch].length > 200, `${ch} 的内置文案不能是空的`);
+    assert.match(d[ch], /【命令】/);
+    assert.match(d[ch], /每人每分钟最多提问 6 次/);
+  }
+  assert.match(d.discord, /原生斜杠命令/);
+  assert.match(d.napcat, /@机器人/);
+  assert.match(d.official, /被动回复/);
+  // 内置文案是代码生成的，不算"用户填的配置"
+  assert.equal(r.data.config.discord.helpText, '');
+});
+
 test('切换评判渠道：一个请求里改渠道 + 填凭据', async () => {
   const r = await call('/api/config', {
     method: 'PUT',

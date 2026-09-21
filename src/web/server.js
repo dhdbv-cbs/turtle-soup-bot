@@ -16,6 +16,7 @@ import {
   verifyPassword,
 } from '../config.js';
 import { PROVIDERS, installedMap, judgeReadiness } from '../judge/providers.js';
+import { defaultHelpText } from '../commands.js';
 import { error, log, warn } from '../utils/logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -218,7 +219,17 @@ export function createAdminApp({ runtime, questionStore, games = null }) {
   // ---------- 配置 ----------
 
   app.get('/api/config', auth, (req, res) => {
-    res.json({ config: publicConfig(), problems: configProblems, configFile: CONFIG_FILE });
+    res.json({
+      config: publicConfig(),
+      // 三个渠道的内置 /help 文案：后台用它把输入框直接填好，省得自己写
+      helpDefaults: {
+        discord: defaultHelpText('discord'),
+        napcat: defaultHelpText('napcat'),
+        official: defaultHelpText('official'),
+      },
+      problems: configProblems,
+      configFile: CONFIG_FILE,
+    });
   });
 
   app.put('/api/config', auth, async (req, res) => {

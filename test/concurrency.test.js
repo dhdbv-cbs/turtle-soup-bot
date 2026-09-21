@@ -17,6 +17,7 @@ for (const key of ['AI_GATEWAY_API_KEY', 'TYPESAFE_API_KEY', 'JUDGE_PROVIDER', '
 const { GameManager } = await import('../src/game/GameManager.js');
 const { QuestionStore } = await import('../src/game/QuestionStore.js');
 const { config, updateConfig, CONFIG_FILE } = await import('../src/config.js');
+const { ASK_RATE_LIMIT } = await import('../src/limits.js');
 
 const Q1 = { id: 1, title: '一', puzzle: '汤面1', answer: '汤底1' };
 const Q2 = { id: 2, title: '二', puzzle: '汤面2', answer: '汤底2' };
@@ -351,6 +352,100 @@ test('全局评判并发有上限：团体再多也不会一起打向网关', as
   assert.equal(calls, 12);
   assert.ok(maxActive <= 8, `并发上限被突破：${maxActive}`);
   assert.equal(gm.activeJudges, 0, '额度要还回去，不能泄漏');
+});
+
+/* ---------------- 防刷：每人每分钟 6 次 ---------------- */
+
+test('同一个人一分钟内第 7 次提问会被拦下，并告诉他要等多久', async () => {
+  let judged = 0;
+  const gm = new GameManager({
+    async judge() {
+      judged++;
+      return { ...OK, similarity: 0.1 };
+    },
+  });
+  beginRound(gm);
+
+  for (let i = 1; i <= ASK_RATE_LIMIT; i++) {
+    const r = await gm.ask('c', 'u1', 'A', `问题${i}`);
+    assert.equal(r.type, 'answer', `第 ${i} 次应该正常作答`);
+  }
+
+  const blocked = await gm.ask('c', 'u1', 'A', '第 7 次');
+  assert.equal(blocked.type, 'hint');
+  assert.match(blocked.text, /每分钟最多 6 次/);
+  assert.match(blocked.text, /请等 \d+ 秒/);
+  assert.equal(blocked.userId, 'u1', '提示要 @ 到提问的人');
+  assert.equal(judged, ASK_RATE_LIMIT, '被拦下的提问不能发给评判模型');
+  assert.equal(gm.history('c').length, ASK_RATE_LIMIT, '也不能写进历史');
+});
+
+test('限制是「每人」：别人不受影响，换个频道也不受影响', async () => {
+  const gm = new GameManager({ judge: async () => ({ ...OK, similarity: 0.1 }) });
+  beginRound(gm, 'c1');
+  beginRound(gm, 'c2');
+
+  for (let i = 1; i <= ASK_RATE_LIMIT; i++) await gm.ask('c1', 'u1', 'A', `问题${i}`);
+  assert.equal((await gm.ask('c1', 'u1', 'A', '再来')).type, 'hint');
+
+  // 同频道里的另一个人照样能问
+  assert.equal((await gm.ask('c1', 'u2', 'B', '我也问')).type, 'answer');
+  // 同一个人换到别的频道，也重新有额度（限制按「频道 + 人」算）
+  assert.equal((await gm.ask('c2', 'u1', 'A', '在别的群问')).type, 'answer');
+});
+
+test('等过了一分钟就恢复，过期的记录也会被清理', async () => {
+  const gm = new GameManager({ judge: async () => ({ ...OK, similarity: 0.1 }) });
+  beginRound(gm);
+  const base = Date.now();
+
+  for (let i = 1; i <= ASK_RATE_LIMIT; i++) gm.consumeAskQuota('c', 'u1', base);
+  assert.ok(gm.consumeAskQuota('c', 'u1', base + 1000), '窗口内应被拦下');
+
+  // 时间往后推过窗口，恢复放行
+  assert.equal(gm.consumeAskQuota('c', 'u1', base + 61000), null);
+  assert.equal(gm.askQuota.size, 1);
+
+  // 清理时把整分钟没动静的记录删掉
+  assert.equal(gm.consumeAskQuota('c', 'u2', base + 61000), null);
+  gm.prune(base + 300000);
+  const after = [...gm.askQuota.keys()];
+  assert.deepEqual(after, [], '过期的频率记录应被清掉');
+});
+
+test('因为「本局还没开始」被挡下的提问不算次数，不会白白扣额度', async () => {
+  const gm = new GameManager({ judge: async () => ({ ...OK, similarity: 0.1 }) });
+  const before = gm.askQuota.size;
+
+  for (let i = 0; i < 10; i++) {
+    const r = await gm.ask('c', 'u1', 'A', '乱问');
+    assert.equal(r.type, 'hint');
+    assert.match(r.text, /还没有题目|还没开始/);
+  }
+  assert.equal(gm.askQuota.size, before, '被游戏状态挡下的提问不该记入频率');
+
+  // 正式开始后额度还是完整的 6 次
+  beginRound(gm);
+  for (let i = 1; i <= ASK_RATE_LIMIT; i++) {
+    assert.equal((await gm.ask('c', 'u1', 'A', `问题${i}`)).type, 'answer');
+  }
+});
+
+test('预检只看不记：适配器反复预检不会把额度扣光', () => {
+  const gm = new GameManager({ judge: async () => ({ ...OK, similarity: 0.1 }) });
+  const base = Date.now();
+
+  for (let i = 0; i < 20; i++) {
+    assert.equal(gm.peekAskQuota('c', 'u1', base), null, '额度没被扣，就不该拦');
+  }
+  assert.equal(gm.askQuota.size, 0, '预检不该留下记录');
+
+  // 真的提问 6 次之后，预检才应该开始提示
+  for (let i = 1; i <= ASK_RATE_LIMIT; i++) assert.equal(gm.consumeAskQuota('c', 'u1', base), null);
+  const pre = gm.peekAskQuota('c', 'u1', base);
+  assert.ok(pre);
+  assert.match(pre.text, /请等 \d+ 秒/);
+  assert.equal(gm.peekAskQuota('c', 'u2', base), null, '别人照样放行');
 });
 
 /* ---------------- 配置热生效 ---------------- */

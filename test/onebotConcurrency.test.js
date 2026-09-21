@@ -217,6 +217,51 @@ test('同一瞬间灌 6 条：超出排队上限的拿到提示，其余的照�
   assert.ok(idle, '队列最终要清空');
 });
 
+test('一个人狂刷：只有前 6 条进入评判，其余收到限流提示', async () => {
+  const group = 5001;
+  const user = 3333;
+  await openRound(group, user);
+  judgeCalls.length = 0;
+  sent.length = 0;
+
+  judgeDelay = 10;
+  for (let i = 1; i <= 8; i++) {
+    groupMessage(group, user, `刷第${i}条`);
+    await sleep(25);
+  }
+
+  const done = await waitFor(() => answersOf(group).length >= 8, { timeout: 5000 });
+  assert.ok(done, `8 条都该有回复，实际 ${answersOf(group).length}`);
+
+  const answers = answersOf(group);
+  assert.equal(judgeCalls.length, 6, '一分钟内只有前 6 条会真的去评判');
+  assert.ok(!answers.slice(0, 6).some((t) => t.includes('问得有点快')), '前 6 条应正常作答');
+  for (const t of answers.slice(6)) assert.match(t, /问得有点快|每分钟最多 6 次/);
+  assert.equal(games.status(`qq:${group}`).questionCount, 6, '被拦下的不该进历史');
+});
+
+test('额度已经用完时，适配器连"思考中"都不发，只回一条提示', async () => {
+  const group = 6001;
+  const user = 4444;
+  await openRound(group, user);
+  sent.length = 0;
+
+  // 先把这个人的额度用满，再让他提问
+  for (let i = 0; i < 6; i++) games.consumeAskQuota(`qq:${group}`, String(user));
+  judgeCalls.length = 0;
+
+  groupMessage(group, user, '还想再问一条');
+  const got = await waitFor(() => messagesOf(group).length >= 1, { timeout: 3000 });
+  assert.ok(got, '应该收到限流提示');
+  await sleep(120); // 再等等，确认没有第二条消息
+
+  const msgs = messagesOf(group);
+  assert.equal(msgs.length, 1, `被限流时只该有一条提示，实际 ${JSON.stringify(msgs)}`);
+  assert.match(msgs[0], /问得有点快/);
+  assert.ok(!msgs[0].includes('思考中'));
+  assert.equal(judgeCalls.length, 0, '被限流的提问不该去评判');
+});
+
 test('两个群同时玩：互不阻塞，各自都拿到全部回复', async () => {
   await openRound(3001, 8001);
   await openRound(3002, 8002);

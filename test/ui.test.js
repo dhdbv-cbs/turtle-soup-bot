@@ -271,6 +271,26 @@ test('评判页显示并发负载：正在评判 / 排队多少条', async () =>
   assert.match(html, /正在评判 3 条，排队 2 条/);
 });
 
+test('渠道页的 /help 文案输入框已按本渠道预先填好，不用自己写', async () => {
+  const cfg = judgeConfigFixture();
+  cfg.helpDefaults = {
+    discord: '🐢 内置 Discord 文案\n【命令】\n  /help\n每人每分钟最多提问 6 次',
+    napcat: '🐢 内置 NapCat 文案',
+    official: '🐢 内置官方文案',
+  };
+  const ui = await bootUi({
+    state: { needsSetup: false, authenticated: true, version: '1.0.0' },
+    hash: '#discord',
+    routes: { '/api/overview': { channels: {}, questions: 0, configProblems: [] }, '/api/config': cfg },
+  });
+
+  const html = ui.html();
+  // 配置里 helpText 是空的，但输入框应该已经带着内置文案
+  assert.match(html, /内置 Discord 文案/);
+  assert.match(html, /data-field="discord\.helpText"/);
+  assert.match(html, /清空保存则恢复这份内置文案/);
+});
+
 test('抽屉可以通过锚点直接展开，并显示该渠道的字段', async () => {
   const ui = await bootUi({
     state: { needsSetup: false, authenticated: true, version: '1.0.0' },

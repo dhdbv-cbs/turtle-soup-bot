@@ -3,6 +3,7 @@
 // 所有渠道统一用 /斜杠命令（Discord 用原生斜杠命令注册，QQ 两个渠道是 /文本命令）。
 // 每个渠道的 /help 正文不一样：因为"怎么触发机器人"在三个渠道里完全不同。
 import { config } from './config.js';
+import { ASK_RATE_LIMIT } from './limits.js';
 
 // 命令表：后台/Discord 注册/帮助文案都从这里取，避免多处各写一份
 export const COMMANDS = [
@@ -39,11 +40,13 @@ const CHANNEL_TITLE = {
 const CHANNEL_INTRO = {
   discord: [
     '在输入框里打 / 就能看到下面这些命令（Discord 原生斜杠命令，带参数提示）。',
-    '也可以直接 @我 + 问题 来提问，效果和 /ask 一样。',
+    '也可以直接 @我 + 问题 来提问，效果和 /ask 一样；私聊我同样能用。',
+    '/help 只有你自己看得到，不会刷屏。',
   ],
   napcat: [
-    '命令直接在群里或私聊里发送即可，例如 /help、/start。',
-    '群里提问请先 @我 再发问题；私聊可以直接发。',
+    '命令直接在群里或私聊里发送即可，例如 /help、/start（普通聊天我不会理）。',
+    '群里提问请先 @我 再发问题，例如「@机器人 他是被谋杀的」；私聊可以直接发。',
+    '私聊我发 /help 也能看到这份说明。',
   ],
   official: [
     '群里请先 @我，再发命令或问题，例如「@机器人 /start」。单聊直接发送即可。',
@@ -60,13 +63,41 @@ function commandTable() {
   }).join('\n');
 }
 
+// 各渠道的提问方式举例（/help 里最有用的一节）
+const CHANNEL_EXAMPLES = {
+  discord: [
+    '  /next                    换到下一题',
+    '  /start                   开始这一题，公布汤面',
+    '  /ask 他是自杀的吗         提问（也可以直接 @我 他是自杀的吗）',
+    '  /status                  看看本局问到哪了',
+  ],
+  napcat: [
+    '  /next                    换到下一题',
+    '  /start                   开始这一题，公布汤面',
+    '  @机器人 他是自杀的吗      提问（写 /ask 他是自杀的吗 也等价）',
+    '  /status                  看看本局问到哪了',
+  ],
+  official: [
+    '  @机器人 /next             换到下一题',
+    '  @机器人 /start            开始这一题，公布汤面',
+    '  @机器人 他是自杀的吗      提问',
+    '  @机器人 /status           看看本局问到哪了',
+  ],
+};
+
+// 所有渠道共用的玩法说明
 const COMMON_TAIL = [
-  '【玩法】',
-  '用 /start 开始后，任何人都可以提问，我只回答「是」或「不是」，并给出与谜底的相似度。',
-  '当有人说到与谜底足够接近（默认 80%）时，判定通关并公布完整谜底——这是多人游戏，大家一起问。',
+  '【怎么玩】',
+  '1. 先选一道题：/next 按顺序换题，/pick <编号> 跳到指定题目，/list 看全部题目。',
+  '2. /start 开始这一局，我会公布汤面（只给线索，不给谜底）。',
+  '3. 本频道里任何人都可以提问，我只回答「是」或「不是」，并给出与谜底的相似度。',
+  '4. 有人问到与谜底足够接近（默认 80%）就集体通关，我会公布完整谜底和参与名单。',
   '',
-  '【权限】',
-  '一局进行中时，只有本局发起人（用 /start 的那个人）能换题（/next、/pick）；本局结束后任何人都可以换。',
+  '【规则与限制】',
+  `· 每人每分钟最多提问 ${ASK_RATE_LIMIT} 次，超过了我会让你歇一下再问。`,
+  '· 一局进行中，只有本局发起人（用 /start 的那个人）能换题（/next、/pick）；本局结束后谁都能换。',
+  '· 换题即开新一局，参与人数和提问记录会清零；/reset 可以把本频道彻底重置。',
+  '· 同时有几个人在问时，我会按提问顺序一条条答，不会乱序。',
 ];
 
 // 取某个渠道的 /help 正文
@@ -76,7 +107,26 @@ export function helpText(platform, { custom } = {}) {
 
   const title = CHANNEL_TITLE[platform] ?? '🐢 海龟汤机器人 · 用法';
   const intro = CHANNEL_INTRO[platform] ?? CHANNEL_INTRO.discord;
-  return [title, '', ...intro, '', '【命令】', commandTable(), '', ...COMMON_TAIL].join('\n');
+  const examples = CHANNEL_EXAMPLES[platform] ?? CHANNEL_EXAMPLES.discord;
+  return [
+    title,
+    '',
+    ...intro,
+    '',
+    '【命令】',
+    commandTable(),
+    '',
+    '【常用例子】',
+    ...examples,
+    '',
+    ...COMMON_TAIL,
+  ].join('\n');
+}
+
+// 该渠道的内置文案（不含自定义覆盖）；后台界面用它把输入框预先填好，
+// 这样你打开页面看到的就是完整文案，不用自己写。
+export function defaultHelpText(platform) {
+  return helpText(platform, {});
 }
 
 // 各渠道的自定义文案（配置里读，方便后台改完立刻生效）

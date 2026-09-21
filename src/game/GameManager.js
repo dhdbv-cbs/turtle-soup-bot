@@ -9,18 +9,15 @@
 //   4. 状态表有上限，长期没人玩的频道会被回收，开很多群也不会无限涨内存。
 import { config } from '../config.js';
 import { log, warn } from '../utils/logger.js';
-
-// 每个频道最多排队的提问数（不含正在评判的那一条）
-const MAX_PENDING_PER_CHANNEL = 3;
-// 空闲多久可以回收（进行中的一局永不回收）
-const STATE_IDLE_MS = 12 * 60 * 60 * 1000;
-// 状态表硬上限，超出后从最久没动过的开始回收
-const MAX_CHANNELS = 500;
-// 清理动作最多每分钟做一次，避免每次取状态都遍历
-const PRUNE_INTERVAL_MS = 60 * 1000;
-// 全局同时进行的评判上限：几个团体一起玩、又同时提问时，
-// 超出的请求留在各自频道的队列里排队，而不是一起打向网关（容易被限流报错）
-const MAX_CONCURRENT_JUDGES = 8;
+import {
+  ASK_RATE_LIMIT,
+  ASK_RATE_WINDOW_MS,
+  MAX_CHANNELS,
+  MAX_CONCURRENT_JUDGES,
+  MAX_PENDING_PER_CHANNEL,
+  PRUNE_INTERVAL_MS,
+  STATE_IDLE_MS,
+} from '../limits.js';
 
 function newState(question = null) {
   return {
@@ -47,6 +44,7 @@ export class GameManager {
     this.winThresholdOverride = winThreshold;
     this.states = new Map(); // channelKey -> state
     this.queues = new Map(); // channelKey -> { running, pending: [] }
+    this.askQuota = new Map(); // `channelKey\0userId` -> 最近一分钟的提问时间戳
     this.lastPrune = 0;
     this.judgeSlots = { active: 0, waiters: [] }; // 全局评判并发额度
   }
@@ -158,9 +156,38 @@ export class GameManager {
     const s = this.getState(channelKey);
     const blocked = this.#blocked(s);
     if (blocked) return blocked;
+    // 防刷：每人每分钟最多 6 次。放在入队之前，免得刷屏把队列也占满
+    const limited = this.consumeAskQuota(channelKey, userId);
+    if (limited) return limited;
     // 记住排队时是哪一局：排队期间换了题，这条提问就不该拿去评判新题目
     const queuedRound = s.roundId;
     return this.#enqueue(channelKey, () => this.#askNow(channelKey, userId, userName, message, queuedRound));
+  }
+
+  // 只看不记：适配器在发"🤔 思考中…"之前先问一句，
+  // 被限流就只回一条提示，不会再多发一条"思考中"（刷屏时不会被放大成两倍消息）
+  peekAskQuota(channelKey, userId, now = Date.now()) {
+    const key = `${channelKey}\u0000${userId}`;
+    const recent = (this.askQuota.get(key) || []).filter((t) => now - t < ASK_RATE_WINDOW_MS);
+    if (recent.length < ASK_RATE_LIMIT) return null;
+    const wait = Math.max(1, Math.ceil((ASK_RATE_WINDOW_MS - (now - recent[0])) / 1000));
+    return {
+      type: 'hint',
+      userId: String(userId),
+      text: `⏳ 问得有点快啦，每人每分钟最多 ${ASK_RATE_LIMIT} 次，请等 ${wait} 秒再问。`,
+    };
+  }
+
+  // 频率限制：返回 null 表示放行（并记一次），否则返回该回的提示。
+  // now 可注入，方便测试窗口滑动，不用真的等一分钟。
+  consumeAskQuota(channelKey, userId, now = Date.now()) {
+    const peeked = this.peekAskQuota(channelKey, userId, now);
+    if (peeked) return peeked;
+    const key = `${channelKey}\u0000${userId}`;
+    const recent = (this.askQuota.get(key) || []).filter((t) => now - t < ASK_RATE_WINDOW_MS);
+    recent.push(now);
+    this.askQuota.set(key, recent);
+    return null;
   }
 
   #staleHint(userId) {
@@ -330,6 +357,10 @@ export class GameManager {
         this.states.delete(key);
         removed++;
       }
+    }
+    // 顺带清掉早就过期的提问频率记录，不然刷过屏的人会一直留在表里
+    for (const [key, stamps] of this.askQuota) {
+      if (!stamps.some((t) => now - t < ASK_RATE_WINDOW_MS)) this.askQuota.delete(key);
     }
     if (removed) log(`清理空闲频道状态 ${removed} 个，现有 ${this.states.size} 个`);
     return removed;

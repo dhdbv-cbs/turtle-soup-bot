@@ -65,6 +65,11 @@ export class CommandHandler {
     return this.gm.ask(channelKey, userId, userName, message);
   }
 
+  // 提问预检（只看不记额度）：适配器用它决定要不要先发"🤔 思考中…"
+  peekAskBlock(channelKey, userId) {
+    return this.gm.peekAskQuota(channelKey, userId);
+  }
+
   list() {
     const list = this.qs.list();
     if (list.length === 0) return '题目库为空，请到后台界面「题库」里添加题目。';

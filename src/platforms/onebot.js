@@ -91,15 +91,18 @@ export function startOneBot(handler) {
         return;
       }
       const echo = String(++echoCounter);
-      pending.set(echo, resolve);
-      ws.send(JSON.stringify({ action, params, echo }));
-      // 超时 10 秒
-      setTimeout(() => {
+      // 超时兜底；收到 echo 时要把定时器清掉，否则每条消息都会留一个 10 秒的定时器
+      const timer = setTimeout(() => {
         if (pending.has(echo)) {
           pending.delete(echo);
           resolve(null);
         }
       }, 10000);
+      pending.set(echo, (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      });
+      ws.send(JSON.stringify({ action, params, echo }));
     });
   }
 
@@ -151,6 +154,12 @@ export function startOneBot(handler) {
     const askText = plainText.trim();
     if (!askText) {
       await sendReply(evt, '你 @我 了但没说内容。用法：/help 查看命令，或 @我 + 你的问题。');
+      return;
+    }
+    // 被限流的话就别再发"思考中"了，直接一条提示（刷屏时不会变成两条消息）
+    const pre = handler.peekAskBlock(channelKey, String(userId));
+    if (pre) {
+      await sendReply(evt, formatAskResult(pre, { mention }).text);
       return;
     }
     await sendReply(evt, '🤔 思考中…');

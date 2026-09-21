@@ -175,7 +175,7 @@ const FORMS = {
     fields: [
       { path: 'discord.enabled', label: '启用 Discord 通道', type: 'bool' },
       { path: 'discord.token', label: 'Bot Token', type: 'secret' },
-      { path: 'discord.helpText', label: '/help 文案', type: 'long', hint: '留空使用内置文案（会说明 Discord 的原生斜杠命令与 @我 提问）；填写后完全替换' },
+      { path: 'discord.helpText', label: '/help 文案', type: 'long', rows: 16, prefill: 'discord', hint: '已经按 Discord 的用法填好了，可以直接改；改完保存才生效，清空保存则恢复这份内置文案' },
     ],
   },
   napcat: {
@@ -185,7 +185,7 @@ const FORMS = {
       { path: 'qq.napcat.enabled', label: '启用该通道', type: 'bool' },
       { path: 'qq.napcat.wsUrl', label: 'WebSocket 地址', type: 'text', placeholder: 'ws://127.0.0.1:3001' },
       { path: 'qq.napcat.accessToken', label: 'Access Token', type: 'secret', hint: 'NapCat 未设置令牌时留空' },
-      { path: 'qq.napcat.helpText', label: '/help 文案', type: 'long', hint: '留空使用内置文案（会说明群里要先 @机器人）；填写后完全替换' },
+      { path: 'qq.napcat.helpText', label: '/help 文案', type: 'long', rows: 16, prefill: 'napcat', hint: '已经按 QQ（NapCat）的用法填好了（群里要先 @机器人），可以直接改；清空保存则恢复内置文案' },
     ],
   },
   official: {
@@ -197,7 +197,7 @@ const FORMS = {
       { path: 'qq.official.appSecret', label: 'AppSecret', type: 'secret' },
       { path: 'qq.official.sandbox', label: '使用沙箱环境', type: 'bool', hint: '关闭后使用正式环境（api.sgroup.qq.com）' },
       { path: 'qq.official.guildMessages', label: '同时接收频道（子频道）@消息', type: 'bool', hint: '需要机器人具备公域消息权限，未开通时可能连不上网关' },
-      { path: 'qq.official.helpText', label: '/help 文案', type: 'long', hint: '留空使用内置文案（会说明被动回复条数限制）；填写后完全替换' },
+      { path: 'qq.official.helpText', label: '/help 文案', type: 'long', rows: 16, prefill: 'official', hint: '已经按 QQ 官方的用法填好了（含被动回复条数限制），可以直接改；清空保存则恢复内置文案' },
     ],
   },
   admin: {
@@ -221,7 +221,11 @@ function getValue(config, path) {
 }
 
 function fieldHtml(f, config) {
-  const value = getValue(config, f.path);
+  const stored = getValue(config, f.path);
+  // /help 这类"留空就用内置文案"的字段：直接把内置文案填进输入框，
+  // 打开页面就是一份完整可用的文案，不用自己写
+  const fallback = f.prefill ? state.helpDefaults?.[f.prefill] || '' : '';
+  const value = stored === '' || stored == null ? fallback : stored;
   const id = 'f_' + f.path.replace(/\./g, '_');
 
   if (f.type === 'bool') {
@@ -256,7 +260,7 @@ function fieldHtml(f, config) {
   if (f.type === 'long') {
     return `<div class="field">
       <label>${esc(f.label)}</label>
-      <textarea data-field="${f.path}" id="${id}" placeholder="${esc(f.placeholder || '')}">${esc(value ?? '')}</textarea>
+      <textarea data-field="${f.path}" id="${id}" rows="${f.rows || 6}" placeholder="${esc(f.placeholder || '')}">${esc(value ?? '')}</textarea>
       ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
   }
 
@@ -300,6 +304,11 @@ function collectFields(card, fields) {
     if (f.type === 'number') {
       if (el.value.trim() === '') continue;
       setPath(patch, f.path, Number(el.value));
+      continue;
+    }
+    // 没改过的内置文案不必存进配置：这样以后内置文案升级了，你这边也能跟着更新
+    if (f.prefill && el.value === (state.helpDefaults?.[f.prefill] || '')) {
+      setPath(patch, f.path, '');
       continue;
     }
     setPath(patch, f.path, el.value);
@@ -829,6 +838,7 @@ async function loadQuestions() {
 async function loadConfig() {
   const r = await api('/api/config');
   state.config = r.config;
+  state.helpDefaults = r.helpDefaults || {};
   state.problems = r.problems || [];
 }
 

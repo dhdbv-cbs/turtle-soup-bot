@@ -179,6 +179,14 @@ export async function startDiscord(handler) {
       return;
     }
 
+    // 被限流的话就别再发"思考中"了，直接一条提示
+    const pre = handler.peekAskBlock(channelKey, userId);
+    if (pre) {
+      const { text: hint, users: hintUsers } = formatAskResult(pre, { mention });
+      await safeReply(message, hint, { repliedUser: false, allowedMentions: { parse: [], users: hintUsers } });
+      return;
+    }
+
     const thinking = await safeReply(message, '🤔 思考中…', { repliedUser: false });
     const result = await handler.handleAsk(channelKey, userId, userName, askText);
     const { text, users } = formatAskResult(result, { mention });
