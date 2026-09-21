@@ -31,6 +31,47 @@ npm start
 http://127.0.0.1:4319
 ```
 
+**Windows / Linux / macOS 都能跑**，没有平台相关分支，也不需要编译。差异只在"怎么让它常驻"：
+
+| 平台 | 启动方式 | 常驻 / 重启 |
+|------|----------|-------------|
+| Windows | 双击 `启动.bat`（会自动开浏览器）或 `npm start` | `启动.bat` 自己就是托管者：点后台「重启进程」后它会把新进程接着跑起来，同一个窗口 |
+| Linux（手动） | `npm start`，或 `nohup npm start &` | 没有守护进程时，机器人自己 spawn 新进程再退出（旧进程走了、新进程接上） |
+| Linux（服务，推荐） | 下面的 systemd 单元 | `systemctl` 托管：点「重启进程」只是退出自己（退出码 99），systemd 立刻拉起新的 |
+
+```ini
+# /etc/systemd/system/turtle-soup-bot.service
+[Unit]
+Description=Turtle Soup Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=turtle
+WorkingDirectory=/opt/turtle-soup-bot
+ExecStart=/usr/bin/node src/index.js
+# 后台点「重启进程」时进程会以 99 退出，on-failure 正好把它当成"该重开一次"
+Restart=on-failure
+RestartSec=2
+# 日志进 journald：journalctl -u turtle-soup-bot -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now turtle-soup-bot
+journalctl -u turtle-soup-bot -f
+```
+
+用 pm2 也一样（`pm2 start src/index.js --name turtle-soup-bot`）：机器人识别到 `pm_id` 这类环境变量后只退出自己，不会自己再拉一个——否则两个进程同时连 Discord/QQ，同一条消息会被回两次。
+
+跨平台上的取舍：文件路径一律用 `node:path` 拼（没有硬编码的 `\` 或 `/`）；配置、题库都是"先写临时文件再 rename"的原子写；批处理固定 CRLF（见 `.gitattributes`）；`npm run lint` 里有一项专门查 **import 路径大小写**——Windows 不区分大小写、Linux 区分，写错大小写在 Windows 上完全看不出来，一搬到 Linux 就 `Cannot find module`。
+
 首次访问会让你设置一个**后台密码**，然后就能在界面里配置一切：
 
 | 页面 | 内容 |
@@ -56,8 +97,10 @@ http://127.0.0.1:4319
 
 「重启进程」的实现（`src/restart.js`）分两种情况，都是**先放开后台端口、断开通道，再拉新进程**（反过来的话新进程会因为端口被占而退出）：
 
-- **没有守护进程**（`npm start` / 双击 `启动.bat`）：自己 spawn 一个参数一模一样的新进程，等它真的起来了（收到 `spawn`）才退出；**起不来就留在原地**把后台服务重新监听上，机器人不会没。
-- **有守护进程**（pm2 / systemd / supervisord，靠 `pm_id`、`INVOCATION_ID` 这类环境变量识别）：只退出自己，让守护进程拉起新的——自己再拉一个的话，会有两个进程同时连 Discord/QQ，同一条消息被回两次。
+- **没有守护进程**（直接 `node src/index.js`）：自己 spawn 一个参数一模一样的新进程，等它真的起来了（收到 `spawn`）才退出；**起不来就留在原地**把后台服务重新监听上，机器人不会没。
+- **有守护进程**（pm2 / systemd / supervisord / `启动.bat`）：只退出自己，用**退出码 99**（"我要重启"这个暗号）让它们拉起新的——`启动.bat` 靠它 `goto` 回上面重开一轮，systemd 的 `Restart=on-failure` 也正好接住。自己再拉一个的话，会有两个进程同时连 Discord/QQ，同一条消息被回两次。
+
+配置写盘用 `0600` 权限（里面是 Discord token、QQ AppSecret、评判密钥和后台密码哈希），Linux/macOS 上同机器的其他用户读不到。
 
 `/help` 文案**不需要你自己写**：打开渠道页，输入框里已经是这份按渠道生成好的完整说明（命令表、常用例子、玩法、规则与限制），你只改想改的部分；原样保存不会把它写进配置文件，所以以后内置文案更新了你也能跟着更新；自己改过就以你的为准，清空保存即恢复内置文案。
 
@@ -323,21 +366,22 @@ curl -s -X POST http://127.0.0.1:4319/api/questions \
 ## 🧪 开发
 
 ```bash
-npm run lint    # 对 src / test / scripts / public 做语法检查（无需额外依赖）
+npm run lint    # 语法检查 + 跨平台检查（import 路径大小写、只差大小写的重名文件）
 npm test        # 单元测试，全部用桩替身，不联网、不碰真实配置与题库、不调用任何 API
 npm run check   # lint + test
 ```
 
-测试覆盖：配置中心（含旧配置迁移、损坏备份、BOM 容错）、评判渠道接线（离线构造每个平台的 evaluation model）、三条通道的启停与热重启、后台 API、题库 CRUD、命令解析与各渠道 `/help`、后台界面渲染（在假 DOM 里真跑一遍 `public/app.js`，含抽屉交互），以及**并发兜底**（同频道串行、只通关一次、换题期间结果作废、排队上限、全局并发上限、状态回收、并发写盘）。
+测试覆盖：配置中心（含旧配置迁移、损坏备份、BOM 容错、密钥文件权限）、评判渠道接线（离线构造每个平台的 evaluation model）、三条通道的启停与热重启、后台 API、题库 CRUD、命令解析与各渠道 `/help`、后台界面渲染（在假 DOM 里真跑一遍 `public/app.js`，含抽屉交互）、**进程重启**（spawn 参数 / 守护进程识别 / 新进程起不来时原地恢复 / 接口 200·409·501），以及**并发兜底**（同频道串行、只通关一次、换题期间结果作废、排队上限、全局并发上限、状态回收、并发写盘）。
 
 ## 📁 项目结构
 
 ```
 turtle-soup-bot/
 ├── .env.example            # 可选的首次运行种子（正常不需要）
+├── .gitattributes          # 批处理保持 CRLF，其余统一 LF
 ├── package.json
 ├── README.md
-├── 启动.bat
+├── 启动.bat                # Windows 一键启动（也是"重启进程"的托管者）
 ├── public/                 # 后台界面（零依赖，无构建）
 │   ├── index.html
 │   ├── app.js

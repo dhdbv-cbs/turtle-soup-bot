@@ -3,10 +3,11 @@
 // 有些改动是热重启通道解决不了的：改了 .env、装了新依赖、换了后台端口、改了代码。
 // 这些必须换一个进程跑。做法分两种：
 //
-//   · 有外部守护进程（pm2 / systemd / supervisord）——**退出自己**，让它把新进程拉起来。
+//   · 有外部守护进程（pm2 / systemd / supervisord / 启动.bat）——**退出自己**，让它拉起新的
+//     （退出码用 RESTART_EXIT_CODE，让它们能区分"重启"和"正常退出"）。
 //     自己再 spawn 一个的话，守护进程也会重启我们，结果两个进程同时连 Discord/QQ，
 //     同一条消息会被回两次。
-//   · 没有守护进程（`npm start` / 双击 启动.bat）——自己 spawn 一个参数完全一样的新进程，
+//   · 没有守护进程（直接 `node src/index.js`）——自己 spawn 一个参数完全一样的新进程，
 //     等它真的起来了再退出；起不来就留在原地继续跑，绝不把机器人弄没。
 //
 // 顺序很关键：**先放开后台监听端口、断开通道，再拉新进程**。
@@ -24,7 +25,13 @@ const SUPERVISORS = [
   ['SUPERVISOR_ENABLED', 'supervisord'],
 ];
 
+// 「我要重启」的退出码：谁在看着我们，谁就靠它区分"正常退出"和"重启"
+// （启动.bat 用 `if errorlevel 99 goto run` 接住它；systemd 的 Restart=on-failure 也会因此重开）
+export const RESTART_EXIT_CODE = 99;
+
 export function detectSupervisor(env = process.env) {
+  // 启动脚本自己声明的托管者（启动.bat 会设成 bat）：由它负责重开，我们不自己 spawn
+  if (env?.TURTLE_SUPERVISOR) return env.TURTLE_SUPERVISOR;
   for (const [key, name] of SUPERVISORS) {
     if (env?.[key]) return name;
   }
@@ -77,8 +84,8 @@ export function createRestarter({
         if (stop) await stop(); // 先放开端口，新进程才抢得到
 
         if (supervisor) {
-          logFn(`检测到外部守护进程（${supervisor}）：退出本进程，由它拉起新的`);
-          exitFn(0);
+          logFn(`检测到外部守护进程（${supervisor}）：退出本进程（code ${RESTART_EXIT_CODE}），由它拉起新的`);
+          exitFn(RESTART_EXIT_CODE);
           return { ok: true, mode: 'exit', supervisor };
         }
 

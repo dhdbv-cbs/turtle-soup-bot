@@ -52,6 +52,17 @@ test('首次运行会生成配置文件，并采用安全默认值', async () =>
   }
 });
 
+test('配置写盘用 0600 权限（存着密钥，别让同机器其他用户读到）', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows 不看 POSIX 权限位');
+    return;
+  }
+  const { stat } = await import('node:fs/promises');
+  await updateConfig({ judge: { winThreshold: 0.75 } });
+  const mode = (await stat(CONFIG_FILE)).mode & 0o777;
+  assert.equal(mode.toString(8), '600', `配置文件权限应该是 600，实际 ${mode.toString(8)}`);
+});
+
 test('非法值被拒绝，且不会污染已生效的配置', async () => {
   const before = config.judge.winThreshold;
   const r = await updateConfig({ judge: { winThreshold: 2 }, admin: { port: 99999 } });

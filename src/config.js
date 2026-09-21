@@ -378,7 +378,10 @@ async function writeConfigNow() {
   await mkdir(dirname(CONFIG_FILE), { recursive: true });
   const tmp = `${CONFIG_FILE}.tmp-${process.pid}-${++saveSeq}`;
   try {
-    await writeFile(tmp, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    // 0600：这里存着 Discord token、QQ AppSecret、评判密钥和后台密码哈希，
+    // 别让同机器上的其他用户读到（Windows 不看 mode，Linux/macOS 生效）。
+    // rename 会连模式一起搬过去，所以先写临时文件再改名不影响这个权限。
+    await writeFile(tmp, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     await rename(tmp, CONFIG_FILE);
   } catch (e) {
     await unlink(tmp).catch(() => {});
@@ -397,7 +400,8 @@ export async function loadConfig() {
     } catch (e) {
       const backup = `${CONFIG_FILE}.corrupt-${Date.now()}.bak`;
       try {
-        await writeFile(backup, await readFile(CONFIG_FILE, 'utf8'), 'utf8');
+        // 备份里同样是密钥，权限跟着配置走
+        await writeFile(backup, await readFile(CONFIG_FILE, 'utf8'), { encoding: 'utf8', mode: 0o600 });
       } catch {}
       error(`配置文件解析失败：${e.message}`);
       error(`原文件已备份到 ${backup}`);

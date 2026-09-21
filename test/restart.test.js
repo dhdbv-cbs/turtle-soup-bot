@@ -12,7 +12,7 @@ process.env.ADMIN_HOST = '';
 process.env.ADMIN_PORT = '';
 
 const { setPassword } = await import('../src/config.js');
-const { createRestarter, detectSupervisor } = await import('../src/restart.js');
+const { createRestarter, detectSupervisor, RESTART_EXIT_CODE } = await import('../src/restart.js');
 const { createAdminApp } = await import('../src/web/server.js');
 
 const runtime = { appliedAt: null, status: () => ({ discord: { state: 'disabled', detail: '未启用' } }), apply: async () => {} };
@@ -70,14 +70,15 @@ test('没有守护进程时：自己拉一模一样的命令，等子进程起�
   assert.deepEqual(events.at(-1), ['exit', 0]);
 });
 
-test('有守护进程（pm2 / systemd）时：只退出自己，不再拉新进程', async () => {
-  for (const env of [{ pm_id: '0' }, { NODE_APP_INSTANCE: '0' }, { INVOCATION_ID: 'abc' }]) {
+test('有守护进程（pm2 / systemd / 启动.bat）时：只退出自己，不再拉新进程', async () => {
+  for (const env of [{ pm_id: '0' }, { NODE_APP_INSTANCE: '0' }, { INVOCATION_ID: 'abc' }, { TURTLE_SUPERVISOR: 'bat' }]) {
     const { restarter, events } = makeRestarter({ options: { env } });
     assert.equal(restarter.accept().mode, 'exit');
     const result = await restarter.run();
     assert.equal(result.mode, 'exit');
     assert.equal(events.some((e) => Array.isArray(e) && e[0] === 'spawn'), false, '不能再拉一个，否则两个进程抢同一条消息');
-    assert.deepEqual(events.at(-1), ['exit', 0]);
+    // 退出码得是"重启"这个暗号：启动.bat 靠它 goto 回上面重开一轮
+    assert.deepEqual(events.at(-1), ['exit', RESTART_EXIT_CODE]);
   }
 });
 
@@ -112,6 +113,9 @@ test('detectSupervisor 认得出常见守护进程，普通启动返回 null', (
   assert.equal(detectSupervisor({ pm2_home: '/root/.pm2' }), 'pm2');
   assert.equal(detectSupervisor({ INVOCATION_ID: 'x' }), 'systemd');
   assert.equal(detectSupervisor({ SUPERVISOR_ENABLED: '1' }), 'supervisord');
+  // 启动.bat 自己声明的优先：它就是那个负责重开的人
+  assert.equal(detectSupervisor({ TURTLE_SUPERVISOR: 'bat' }), 'bat');
+  assert.equal(detectSupervisor({ TURTLE_SUPERVISOR: 'bat', pm_id: '0' }), 'bat');
 });
 
 /* ---------------- 接口 ---------------- */

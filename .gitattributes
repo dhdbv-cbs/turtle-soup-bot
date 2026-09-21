@@ -1,0 +1,6 @@
+# 跨平台一致性：
+# - Windows 的批处理必须用 CRLF，否则 :label / goto 会出问题
+# - 其余文本文件统一 LF，避免在 Linux 上出现莫名的 CR
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
