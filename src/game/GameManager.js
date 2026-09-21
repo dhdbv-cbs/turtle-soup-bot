@@ -164,8 +164,7 @@ export class GameManager {
     return this.#enqueue(channelKey, () => this.#askNow(channelKey, userId, userName, message, queuedRound));
   }
 
-  // 只看不记：适配器在发"🤔 思考中…"之前先问一句，
-  // 被限流就只回一条提示，不会再多发一条"思考中"（刷屏时不会被放大成两倍消息）
+  // 只看不记：返回该用户当前是否已被限流（供需要提前判断的调用方使用）
   peekAskQuota(channelKey, userId, now = Date.now()) {
     const key = `${channelKey}\u0000${userId}`;
     const recent = (this.askQuota.get(key) || []).filter((t) => now - t < ASK_RATE_WINDOW_MS);

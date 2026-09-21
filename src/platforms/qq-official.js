@@ -31,7 +31,7 @@ export function startQqOfficial(handler) {
   const apiBase = cfg.sandbox ? API_BASE.sandbox : API_BASE.production;
 
   const status = { state: 'connecting', detail: '准备连接' };
-  // 官方接口不支持 @ 语法，只能用昵称或占位名
+  // 官方接口不支持 @ 语法，只能显示用户名（"群友"+账号尾号）
   const mention = (_id, name) => name || '玩家';
   let stopped = false;
   let ws = null;
@@ -323,13 +323,7 @@ export function startQqOfficial(handler) {
     }
 
     // 2) 提问（群里只有 @机器人 才会收到事件，单聊则直接就是提问）
-    // 官方通道回复条数有严格限制，被限流时更要省着用：直接回提示，不发"思考中"
-    const pre = handler.peekAskBlock(channelKey, userId);
-    if (pre) {
-      await sendReply(target, formatAskResult(pre, { mention }).text, msgId);
-      return;
-    }
-    await sendReply(target, '🤔 思考中…', msgId);
+    // 不预设占位消息：官方通道回复条数有限，一条就够
     const result = await handler.handleAsk(channelKey, userId, userName, text);
     const { text: reply } = formatAskResult(result, { mention });
     await sendReply(target, reply, msgId);

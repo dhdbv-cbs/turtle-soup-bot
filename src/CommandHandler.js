@@ -65,7 +65,7 @@ export class CommandHandler {
     return this.gm.ask(channelKey, userId, userName, message);
   }
 
-  // 提问预检（只看不记额度）：适配器用它决定要不要先发"🤔 思考中…"
+  // 提问预检（只看不记额度）：需要提前判断"这条提问会不会被限流"时用
   peekAskBlock(channelKey, userId) {
     return this.gm.peekAskQuota(channelKey, userId);
   }
@@ -111,7 +111,7 @@ export class CommandHandler {
       `🎮 第 #${q.id} 题：${q.title}\n\n` +
       `【汤面】\n${q.puzzle}\n\n` +
       `游戏开始！大家可以直接提问（Discord 用 /ask 或 @我，QQ 群里先 @我），我只回答「是」或「不是」。` +
-      `当有人的话与谜底相似度 ≥ ${Math.round(this.gm.winThreshold * 100)}% 即通关。`
+      `当有人问到跟谜底吻合时，就是集体通关。`
     );
   }
 
@@ -126,7 +126,7 @@ export class CommandHandler {
     ];
     if (s.ownerName) lines.push(`本局发起人：${s.ownerName}`);
     if (s.winner) {
-      lines.push(`🏆 通关者：${s.winner.userName}（相似度 ${(s.winner.similarity * 100).toFixed(0)}%）`);
+      lines.push(`🏆 通关者：${s.winner.userName}`);
     }
     if (s.revealed) lines.push('谜底已公布。');
     return lines.join('\n');

@@ -40,7 +40,9 @@ test('每个渠道的 /help 都包含：标题、触发方式、全部命令、�
     );
     // 换题权限、通关条件这些容易踩坑的地方要有说明
     assert.match(text, /只有本局发起人/);
-    assert.match(text, /相似度/);
+    // 但**不能**把相似度告诉玩家（判定过程不对外暴露）
+    assert.doesNotMatch(text, /相似度/);
+    assert.doesNotMatch(text, /\d+%/);
   }
 });
 

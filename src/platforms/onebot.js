@@ -10,6 +10,7 @@ import { log, error, warn } from '../utils/logger.js';
 export function startOneBot(handler) {
   const { wsUrl: WS_URL, accessToken: ACCESS_TOKEN } = config.qq.napcat;
 
+  // 真正的 @：QQ 客户端会把它显示成对方的群名片/昵称
   const mention = (id, name) => (id ? `[CQ:at,qq=${id}]` : name || '玩家');
   const status = { state: 'connecting', detail: '正在连接…' };
   let stopped = false;
@@ -156,13 +157,7 @@ export function startOneBot(handler) {
       await sendReply(evt, '你 @我 了但没说内容。用法：/help 查看命令，或 @我 + 你的问题。');
       return;
     }
-    // 被限流的话就别再发"思考中"了，直接一条提示（刷屏时不会变成两条消息）
-    const pre = handler.peekAskBlock(channelKey, String(userId));
-    if (pre) {
-      await sendReply(evt, formatAskResult(pre, { mention }).text);
-      return;
-    }
-    await sendReply(evt, '🤔 思考中…');
+    // 不预设"思考中"之类的占位消息，评判完直接一条回复
     const result = await handler.handleAsk(channelKey, String(userId), userName, askText);
     const { text } = formatAskResult(result, { mention });
     await sendReply(evt, text);

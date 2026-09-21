@@ -1,17 +1,21 @@
 // 各平台共用的提问结果格式化：避免同一段文案在三个适配器里各写一遍
 //
 // 返回 { text, users }
-//   text  最终回复文本
-//   users 需要被 @ 的用户 id 列表（Discord 用来设置 allowedMentions，其它平台忽略）
+//   text   最终回复文本
+//   users  需要被 @ 的用户 id 列表（Discord 用来设置 allowedMentions，其它平台忽略）
+//
+// 回复里**不出现相似度**：玩家只看得到「是 / 不是」和这是谁问的。
+// 谁问的用各平台真正的 @（Discord `<@id>`、QQ `[CQ:at,qq=id]`），
+// 客户端会把它显示成对方的昵称；实在拿不到 id 时（如 QQ 官方接口）才退回显示用户名。
 
 export function formatAskResult(result, { mention = defaultMention } = {}) {
   if (!result) return { text: '评判失败，请重试。', users: [] };
 
   switch (result.type) {
     case 'win': {
-      const names = [...new Set((result.history || []).map((h) => h.userName))];
+      const names = [...new Set((result.history || []).map((h) => h.userName).filter(Boolean))];
       const text =
-        `🎉 通关！由 ${mention(result.userId, result.userName)} 揭示谜底（相似度 ${percent(result.similarity)}）\n\n` +
+        `🎉 通关！由 ${mention(result.userId, result.userName)} 揭示谜底\n\n` +
         `参与玩家（${result.participantCount} 人）：${names.join('、')}\n\n` +
         `【完整谜底】\n${result.question?.answer ?? ''}\n\n` +
         `用 /next 开始新的一局！`;
@@ -19,7 +23,7 @@ export function formatAskResult(result, { mention = defaultMention } = {}) {
     }
 
     case 'answer': {
-      const text = `${mention(result.askerId, result.asker)}：${result.answer}（与谜底相似度 ${percent(result.similarity)}）`;
+      const text = `${mention(result.askerId, result.asker)}：${result.answer}`;
       return { text, users: result.askerId ? [result.askerId] : [] };
     }
 
@@ -29,11 +33,6 @@ export function formatAskResult(result, { mention = defaultMention } = {}) {
       return { text, users: result.userId ? [result.userId] : [] };
     }
   }
-}
-
-function percent(value) {
-  const n = Number(value);
-  return `${((Number.isFinite(n) ? n : 0) * 100).toFixed(0)}%`;
 }
 
 function defaultMention(id, fallbackName) {

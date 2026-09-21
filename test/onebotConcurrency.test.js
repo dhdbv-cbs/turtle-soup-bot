@@ -98,9 +98,9 @@ function messagesOf(groupId) {
     .map((m) => m.params.message);
 }
 
-// 真正的回复（排除“思考中…”占位消息）
+// 真正的回复：现在适配器不再发任何"思考中"之类的占位消息，这里就是全部消息
 function answersOf(groupId) {
-  return messagesOf(groupId).filter((t) => !t.includes('思考中'));
+  return messagesOf(groupId);
 }
 
 /* ---------------- 被测对象 ---------------- */
@@ -183,6 +183,8 @@ test('同一个群刷 6 条提问：串行评判，回复顺序与提问顺序�
   assert.equal(replies.length, 6);
   assert.equal(judgeCalls.length, 6, '每条提问都应经过评判');
   assert.deepEqual(judgeCalls, ['问题1', '问题2', '问题3', '问题4', '问题5', '问题6']);
+  assert.ok(!replies.some((t) => t.includes('思考中')), '不该再有占位消息');
+  assert.ok(!replies.some((t) => /相似度|%/.test(t)), '回复里不能出现相似度');
 
   // 回复里 @ 的是提问者，顺序应与提问顺序一致
   const order = replies.map((t) => (t.match(/\[CQ:at,qq=(\d+)\]/) || [])[1]);
@@ -240,7 +242,7 @@ test('一个人狂刷：只有前 6 条进入评判，其余收到限流提示',
   assert.equal(games.status(`qq:${group}`).questionCount, 6, '被拦下的不该进历史');
 });
 
-test('额度已经用完时，适配器连"思考中"都不发，只回一条提示', async () => {
+test('额度已经用完时，只回一条提示（不再有任何占位消息）', async () => {
   const group = 6001;
   const user = 4444;
   await openRound(group, user);

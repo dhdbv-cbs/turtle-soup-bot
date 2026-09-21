@@ -31,6 +31,7 @@ export async function startDiscord(handler) {
     partials: [Partials.Channel],
   });
 
+  // 真正的 @：Discord 会把它显示成对方的用户名
   const mention = (id, name) => (id ? `<@${id}>` : name || '玩家');
 
   // 注册斜杠命令：全局 + 已加入的每个服务器（服务器内的命令立刻生效，全局最长要 1 小时）
@@ -179,26 +180,9 @@ export async function startDiscord(handler) {
       return;
     }
 
-    // 被限流的话就别再发"思考中"了，直接一条提示
-    const pre = handler.peekAskBlock(channelKey, userId);
-    if (pre) {
-      const { text: hint, users: hintUsers } = formatAskResult(pre, { mention });
-      await safeReply(message, hint, { repliedUser: false, allowedMentions: { parse: [], users: hintUsers } });
-      return;
-    }
-
-    const thinking = await safeReply(message, '🤔 思考中…', { repliedUser: false });
+    // 不预设"思考中"占位消息，评判完直接回复（评判期间 Discord 本身会显示加载状态）
     const result = await handler.handleAsk(channelKey, userId, userName, askText);
     const { text, users } = formatAskResult(result, { mention });
-
-    if (thinking) {
-      try {
-        await thinking.edit({ content: text, allowedMentions: { parse: [], users, repliedUser: false } });
-        return;
-      } catch {
-        // 编辑失败则退回普通回复
-      }
-    }
     await safeReply(message, text, { users, repliedUser: false });
   }
 
