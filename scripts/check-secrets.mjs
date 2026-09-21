@@ -43,8 +43,9 @@ const PLACEHOLDER =
 
 // 未跟踪且没被忽略的文件里，名字像“配置文件”的：这类文件一旦 add 就危险。
 // 只认真正的配置/凭据文件名，不是名字里带 secret 的源码（否则脚本自己就先中招）。
+// config[^/]*\.json[^/]* 要连后缀变体一起认：config.json.bak-<时间戳> 里同样有密钥。
 const RISKY_NAME =
-  /(^|\/)(\.env(\..+)?|config[^/]*\.json|secrets?\.json|credentials?\.json|[^/]*\.(pem|key|p12|pfx))$/i;
+  /(^|\/)(\.env(\..+)?|config[^/]*\.json[^/]*|secrets?\.json|credentials?\.json|[^/]*\.(pem|key|p12|pfx))$/i;
 // 这些是有意入库的模板，不算危险
 const ALLOWED_RISKY = new Set(['.env.example']);
 

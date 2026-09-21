@@ -12,8 +12,9 @@ data/config.json
 data/config.*.json
 
 # 配置/题库损坏时的自动备份与原子写入的临时文件
-# （备份里同样是密钥，所以按后缀一律拦掉，不写具体文件名）
-data/*.bak
+# （备份里同样是密钥，所以按后缀一律拦掉，不写具体文件名；
+#   注意要写成 *.bak* ：线上出现过 questions.json.bak-<时间戳> 这种命名）
+data/*.bak*
 data/*.tmp*
 
 # 日志

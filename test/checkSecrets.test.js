@@ -119,6 +119,8 @@ test('isRiskyUntrackedName：只认真正的配置/凭据文件名，不误伤�
     '.env.local',
     'data/config.json',
     'data/config.prod.json',
+    'data/config.json.bak-20260921-211629', // 线上真实出现过的备份命名
+    'data/config.json.corrupt-1699999999.bak',
     'secrets.json',
     'deploy/id_rsa.pem',
     'server.key',
