@@ -161,6 +161,8 @@ npm i @ai-sdk/typesafe-ai   # TypeSafe 官方直连 / 中转的 TypeSafe 协议
 
 斜杠命令只注册**一份全局命令**：服务器里能用，私聊里也能用，改动最长 1 小时在客户端生效。**不会**再给每个服务器单独注册——那样客户端里同一个 `/help` 会出现两条（Discord 不合并全局与服务器级的同名命令）；启动时若发现旧版本留下过服务器级命令会自动清掉。命令内容没变化时跳过重复注册，所以保存配置导致的热重启不会反复打扰 Discord。
 
+提问时频道里会显示「机器人 正在输入…」（就是 Discord 的输入状态）：评判可能要好几秒，这个状态每 8 秒自动续期一次（Discord 的输入状态本身只维持约 10 秒），**回复一发出去就结束**；斜杠命令不用这一套——Discord 自己会用 `deferReply` 显示「正在思考…」。
+
 ### QQ · NapCat（OneBot v11）
 1. 安装 [NapCat](https://github.com/NapNeko/NapCatQQ) / [Lagrange](https://github.com/LagrangeDev/Lagrange.Core)
 2. 在 NapCat 里开启 **WebSocket 服务端**（机器人会主动连过去），端口默认 `3001`

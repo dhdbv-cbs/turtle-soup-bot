@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { COMMANDS, isEphemeralCommand } from '../commands.js';
 import { formatAskResult } from './format.js';
 import { syncDiscordCommands } from './discordCommands.js';
+import { startTyping } from './typing.js';
 import { proxyRestAgent } from '../proxy.js';
 import { log, error, warn } from '../utils/logger.js';
 
@@ -150,16 +151,22 @@ export async function startDiscord(handler) {
 
     // 文本形式的 /命令（正常情况 Discord 客户端会拦截 "/"，这里只作兜底）
     if (content.startsWith('/')) {
-      const result = await handler.handle(channelKey, userId, userName, content, {
-        platform: 'discord',
-      });
-      if (!result) return;
-      if (result.ask) {
-        const { text, users } = formatAskResult(result.ask, { mention });
-        await safeReply(message, text, { users, repliedUser: false });
-        return;
+      // 只有 /ask 会真的等评判，其余命令是即时的，不必闪一下输入状态
+      const stopTyping = /^\/ask(\s|$)/i.test(content) ? startTyping(message.channel) : () => {};
+      try {
+        const result = await handler.handle(channelKey, userId, userName, content, {
+          platform: 'discord',
+        });
+        if (!result) return;
+        if (result.ask) {
+          const { text, users } = formatAskResult(result.ask, { mention });
+          await safeReply(message, text, { users, repliedUser: false });
+          return;
+        }
+        await safeReply(message, result.text, { repliedUser: true });
+      } finally {
+        stopTyping();
       }
-      await safeReply(message, result.text, { repliedUser: true });
       return;
     }
 
@@ -178,10 +185,17 @@ export async function startDiscord(handler) {
       return;
     }
 
-    // 不预设"思考中"占位消息，评判完直接回复（评判期间 Discord 本身会显示加载状态）
-    const result = await handler.handleAsk(channelKey, userId, userName, askText);
-    const { text, users } = formatAskResult(result, { mention });
-    await safeReply(message, text, { users, repliedUser: false });
+    // 评判要好几秒，先在频道里显示「正在输入…」（会自己续期）；
+    // 回复一发出去 Discord 就结束这个状态，这里只负责收掉续期定时器。
+    // 斜杠命令不需要它：Discord 自己会用 deferReply 显示「正在思考…」。
+    const stopTyping = startTyping(message.channel);
+    try {
+      const result = await handler.handleAsk(channelKey, userId, userName, askText);
+      const { text, users } = formatAskResult(result, { mention });
+      await safeReply(message, text, { users, repliedUser: false });
+    } finally {
+      stopTyping();
+    }
   }
 
   // users：允许被 @ 的用户 id 列表（其余一律不解析，防止题库文本里的 @everyone 触发全员提醒）
