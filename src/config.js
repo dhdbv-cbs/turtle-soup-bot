@@ -24,6 +24,12 @@ export const CONFIG_FILE = process.env.CONFIG_FILE
 // 密钥字段对外返回这个占位符
 export const SECRET_MASK = '••••••••';
 
+// 普通提问（@机器人 的 yes/no 提问）的回答方式：
+//   reply    直接回一条消息（默认，和以前一样）
+//   reaction 在提问者那条消息上打 ✅ / ❌ / 🤔
+// /ask 提交结论不受影响：逐句核对没法塞进一个反应里，始终直接回复。
+export const ASK_REPLY_MODES = ['reply', 'reaction'];
+
 export function defaultConfig() {
   return {
     admin: {
@@ -51,6 +57,8 @@ export function defaultConfig() {
     discord: {
       enabled: false,
       token: '',
+      // 普通提问（@机器人 提问）怎么答：reply 回一条消息 / reaction 在提问消息上打 ✅❌🤔
+      askReplyMode: 'reply',
       // 留空则用内置的渠道说明；填了就替换掉 /help 的正文
       helpText: '',
     },
@@ -132,6 +140,14 @@ function makeCoercer(problems, prefix = '') {
       if (['1', 'true', 'yes', 'on'].includes(v)) return true;
       if (['0', 'false', 'no', 'off'].includes(v)) return false;
       problems.push(`${path(key)} 必须是布尔值（true/false），当前值：${JSON.stringify(value)}`);
+      return fallback;
+    },
+    // 枚举值：只接受白名单里的取值，其余一律拒绝（退回默认值并报错）
+    oneOf(value, allowed, fallback, key) {
+      if (value === undefined || value === null || value === '') return fallback;
+      const v = String(value).trim();
+      if (allowed.includes(v)) return v;
+      problems.push(`${path(key)} 只能是 ${allowed.join(' / ')}，当前值：${JSON.stringify(value)}`);
       return fallback;
     },
   };
@@ -240,6 +256,12 @@ export function coerceConfig(raw, problems = []) {
   const d = isPlainObject(r.discord) ? r.discord : {};
   out.discord.enabled = c.bool(d.enabled, def.discord.enabled, 'discord.enabled');
   out.discord.token = c.str(d.token, '', 'discord.token') ?? '';
+  out.discord.askReplyMode = c.oneOf(
+    d.askReplyMode,
+    ASK_REPLY_MODES,
+    def.discord.askReplyMode,
+    'discord.askReplyMode',
+  );
   out.discord.helpText = c.str(d.helpText, '', 'discord.helpText') ?? '';
 
   // qq.napcat
@@ -313,6 +335,7 @@ function seedFromEnv() {
     discord: {
       enabled: bool('DISCORD_ENABLED'),
       token: secret('DISCORD_TOKEN'),
+      askReplyMode: str('DISCORD_ASK_REPLY_MODE'),
     },
     // .env 里写了 PROXY_URL 就等于启用代理
     proxy: {
@@ -461,6 +484,7 @@ export function publicConfig() {
     },
     discord: {
       enabled: c.discord.enabled,
+      askReplyMode: c.discord.askReplyMode,
       helpText: c.discord.helpText,
       token: c.discord.token ? SECRET_MASK : '',
       tokenSet: !!c.discord.token,
@@ -542,6 +566,7 @@ export async function updateConfig(patch) {
   }
 
   set(next.discord, 'enabled', p.discord?.enabled);
+  set(next.discord, 'askReplyMode', p.discord?.askReplyMode);
   set(next.discord, 'helpText', p.discord?.helpText);
 
   set(next.proxy, 'enabled', p.proxy?.enabled);

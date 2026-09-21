@@ -249,6 +249,117 @@ test('本局结束后任何人都能换题', async () => {
   assert.match(r.text, /#2 题：乙/);
 });
 
+/* ---------------- 并发：别人冲不掉正在进行的一局 ---------------- */
+
+test('并发：别人不能公布谜底，这一局不会被提前结束', async () => {
+  const { handler, gm } = await setup();
+  await handler.handle('c', 'u1', 'A', '/next');
+  await handler.handle('c', 'u1', 'A', '/start');
+
+  const denied = await handler.handle('c', 'u2', 'B', '/reveal');
+  assert.match(denied.text, /只有发起人 A 可以公布谜底/);
+
+  const status = gm.status('c');
+  assert.equal(status.revealed, false, '谜底不能因为别人点一下就摊开');
+  assert.equal(status.started, true, '本局还得继续');
+
+  // 发起人自己可以公布
+  const ok = await handler.handle('c', 'u1', 'A', '/reveal');
+  assert.match(ok.text, /谜底公布/);
+  assert.equal(gm.status('c').revealed, true);
+});
+
+test('并发：别人不能用 /reset 把正在进行的一局清掉', async () => {
+  const { handler, gm } = await setup();
+  await handler.handle('c', 'u1', 'A', '/next');
+  await handler.handle('c', 'u1', 'A', '/start');
+
+  const denied = await handler.handle('c', 'u2', 'B', '/reset');
+  assert.match(denied.text, /只有发起人 A 可以重置本局/);
+  assert.equal(gm.status('c').started, true, '状态必须还在');
+  assert.equal(gm.status('c').questionTitle, '甲', '题目也得还在');
+
+  // 发起人自己可以重置
+  const ok = await handler.handle('c', 'u1', 'A', '/reset');
+  assert.match(ok.text, /已重置/);
+  assert.equal(gm.status('c').hasQuestion, false);
+});
+
+test('并发：本局结束后，别人就可以公布/重置了', async () => {
+  const { handler, gm } = await setup([{ isYes: true, yesProb: 1, similarity: 0.9, usage: null }]);
+  await handler.handle('c', 'u1', 'A', '/next');
+  await handler.handle('c', 'u1', 'A', '/start');
+  await handler.handleAsk('c', 'u1', 'A', '我完整说出谜底'); // 通关 → 本局结束
+
+  const reveal = await handler.handle('c', 'u2', 'B', '/reveal');
+  assert.match(reveal.text, /谜底公布/);
+
+  const reset = await handler.handle('c', 'u2', 'B', '/reset');
+  assert.match(reset.text, /已重置/);
+  assert.equal(gm.status('c').hasQuestion, false);
+});
+
+test('并发：局中别人点旧卡片上的"公布谜底"，走的是同一道校验', async () => {
+  const { handler, gm } = await setup();
+  await handler.handle('c', 'u1', 'A', '/next');
+  await handler.handle('c', 'u1', 'A', '/start');
+
+  // 卡片按钮最终调用的是 revealModel（适配器里带 userId），校验必须在这里也生效
+  const denied = handler.revealModel('c', 'u2');
+  assert.equal(denied.ok, false);
+  assert.match(denied.msg, /只有发起人 A 可以公布谜底/);
+  assert.equal(gm.status('c').revealed, false);
+
+  const ok = handler.revealModel('c', 'u1');
+  assert.equal(ok.ok, true);
+  assert.equal(ok.question.id, 1);
+});
+
+test('并发：A 的提问还在评判时，B 连点公布/重置/换题都冲不掉这一局', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'turtle-soup-race-'));
+  const file = join(dir, 'questions.json');
+  await writeFile(file, JSON.stringify([{ id: 1, title: '甲', puzzle: '甲汤面', answer: '甲汤底' }]), 'utf8');
+  const qs = new QuestionStore({ file });
+  await qs.load();
+
+  // 把评判卡住，模拟"正在评判"的那几秒
+  let release;
+  const gate = new Promise((r) => {
+    release = r;
+  });
+  const gm = new GameManager({
+    async judge() {
+      await gate;
+      return { isYes: true, yesProb: 0.9, similarity: 0.1, usage: null };
+    },
+    async judgeSentences() {
+      return { isYes: null, yesProb: 0, similarity: 0, failed: false, items: [] };
+    },
+  });
+  const handler = new CommandHandler(gm, qs);
+
+  await handler.handle('c', 'u1', 'A', '/next');
+  await handler.handle('c', 'u1', 'A', '/start');
+
+  const pending = handler.handleAsk('c', 'u1', 'A', '是谋杀吗');
+
+  // B 在这几秒里连点：三个"冲掉本局"的动作一个都不该成功
+  assert.match((await handler.handle('c', 'u2', 'B', '/reveal')).text, /只有发起人 A 可以公布谜底/);
+  assert.match((await handler.handle('c', 'u2', 'B', '/reset')).text, /只有发起人 A 可以重置本局/);
+  assert.match((await handler.handle('c', 'u2', 'B', '/next')).text, /只有发起人 A 可以换题/);
+
+  const mid = gm.status('c');
+  assert.equal(mid.started, true, '本局还得在进行中');
+  assert.equal(mid.revealed, false, '谜底不能被别人摊开');
+  assert.equal(mid.questionTitle, '甲', '题目不能被别人换掉');
+
+  release();
+  const answer = await pending;
+  assert.equal(answer.type, 'answer', 'A 的提问照常拿到回答');
+  assert.equal(gm.status('c').questionTitle, '甲', '答的还是原来那道题');
+  assert.equal(gm.status('c').questionCount, 1);
+});
+
 test('状态：未选题与进行中两种文案', async () => {
   const { handler } = await setup();
   assert.match((await handler.handle('c', 'u1', 'A', '/status')).text, /当前没有题目/);

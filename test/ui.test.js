@@ -384,8 +384,7 @@ test('评判页显示并发负载：正在评判 / 排队多少条', async () =>
   assert.match(html, /正在评判 3 条，排队 2 条/);
 });
 
-test('渠道页的 /help 文案输入框已按本渠道预先填好，不用自己写', async () => {
-  const cfg = judgeConfigFixture();
+test('渠道页的 /help 文案输入框已按本渠道预先填好，不用自己写', async () => {  const cfg = judgeConfigFixture();
   cfg.helpDefaults = {
     discord: '🐢 内置 Discord 文案\n【命令】\n  /help\n每人每分钟最多提问 6 次',
     napcat: '🐢 内置 NapCat 文案',
@@ -402,6 +401,31 @@ test('渠道页的 /help 文案输入框已按本渠道预先填好，不用自�
   assert.match(html, /内置 Discord 文案/);
   assert.match(html, /data-field="discord\.helpText"/);
   assert.match(html, /清空保存则恢复这份内置文案/);
+});
+
+test('Discord 页：「普通提问的回答方式」是下拉框，并回显配置里的取值', async () => {
+  const boot = (mode) => {
+    const cfg = judgeConfigFixture();
+    cfg.config.discord.askReplyMode = mode;
+    return bootUi({
+      state: { needsSetup: false, authenticated: true, version: '1.0.0' },
+      hash: '#discord',
+      routes: { '/api/overview': { channels: {}, questions: 0, configProblems: [] }, '/api/config': cfg },
+    });
+  };
+
+  const reaction = await boot('reaction');
+  const html = reaction.html();
+  assert.match(html, /<select[^>]*data-select="discord\.askReplyMode"/, '应渲染下拉框');
+  assert.match(html, /直接回复/, '两个选项都要在');
+  assert.match(html, /用反应回复/);
+  assert.match(html, /value="reaction" selected/, '配置是 reaction 就要选中它');
+  assert.doesNotMatch(html, /value="reply" selected/);
+  assert.match(html, /玩家在 \/start 卡片上可以自己切换/, '要说清这只是默认值，玩家能自己切');
+
+  const reply = await boot('reply');
+  assert.match(reply.html(), /value="reply" selected/, '配置是 reply 就要选中它');
+  assert.doesNotMatch(reply.html(), /value="reaction" selected/);
 });
 
 test('抽屉可以通过锚点直接展开，并显示该渠道的字段', async () => {

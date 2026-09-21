@@ -194,6 +194,10 @@ const FORMS = {
     fields: [
       { path: 'discord.enabled', label: '启用 Discord 通道', type: 'bool' },
       { path: 'discord.token', label: 'Bot Token', type: 'secret' },
+      { path: 'discord.askReplyMode', label: '新频道的默认回答方式', type: 'select', options: [
+        { value: 'reply', label: '直接回复（回一条消息）' },
+        { value: 'reaction', label: '用反应回复（在提问消息上打 ✅ / ❌ / 🤔）' },
+      ], hint: '只作为默认值：玩家在 /start 卡片上可以自己切换，切过之后以频道里的选择为准。/ask 提交结论始终直接回复；反应模式需要在频道里有「添加反应」权限，加不上时会自动退回文字回复' },
       { path: 'discord.helpText', label: '/help 文案', type: 'long', rows: 16, prefill: 'discord', hint: '已经按 Discord 的用法填好了，可以直接改；改完保存才生效，清空保存则恢复这份内置文案' },
     ],
   },

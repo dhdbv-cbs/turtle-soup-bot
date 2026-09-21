@@ -13,7 +13,7 @@
 //   3. 每条提问记录本局编号，评判期间题目被换掉/重置时这条结果直接作废，
 //      既不会写进下一局，也不会让下一局莫名通关；
 //   4. 状态表有上限，长期没人玩的频道会被回收，开很多群也不会无限涨内存。
-import { config } from '../config.js';
+import { ASK_REPLY_MODES, config } from '../config.js';
 import { log, warn } from '../utils/logger.js';
 import { splitSentences } from './sentences.js';
 import {
@@ -38,6 +38,10 @@ function newState(question = null) {
     // 本局发起人：开始本局的人，进行中只有 TA 能换题
     ownerId: null,
     ownerName: null,
+    // 普通提问怎么答：'reply' 回一条消息 / 'reaction' 在提问者消息上打 ✅❌🤔
+    // null 表示"还没人选过"，这时用后台配置的默认值（改了默认值立即对这类频道生效）；
+    // 一旦发起人在卡片上切过，就记住这个频道的选择，不再被默认值覆盖。
+    answerMode: null,
     createdAt: Date.now(),
     // 本局编号：换题/重开都会 +1，用来识别"评判期间题目被换掉了"
     roundId: 0,
@@ -146,6 +150,23 @@ export class GameManager {
     if (!this.isRoundActive(s)) return true;
     if (!s.ownerId) return true;
     return String(userId) === s.ownerId;
+  }
+
+  // 普通提问的回答方式：这个频道选过的值优先，没选过就用后台配置的默认值
+  answerMode(channelKey) {
+    const s = this.getState(channelKey);
+    return s.answerMode || config.discord.askReplyMode;
+  }
+
+  // 玩家（发起人）自己在卡片上切换回答方式，记在这个频道上，之后的提问都按新方式答
+  setAnswerMode(channelKey, mode) {
+    if (!ASK_REPLY_MODES.includes(mode)) {
+      return { ok: false, msg: `回答方式只能是 ${ASK_REPLY_MODES.join(' / ')}。` };
+    }
+    const s = this.getState(channelKey);
+    s.answerMode = mode;
+    log(`[${channelKey}] 回答方式切换为 ${mode}`);
+    return { ok: true, mode };
   }
 
   /* ---------------- 提问：按频道串行 ---------------- */
@@ -449,6 +470,8 @@ export class GameManager {
       revealed: s.revealed,
       ownerId: s.ownerId,
       ownerName: s.ownerName,
+      // 普通提问的当前回答方式（卡片上的按钮要显示它，答题时也按它走）
+      answerMode: this.answerMode(channelKey),
       pending: this.queues.get(channelKey)?.pending.length ?? 0,
     };
   }

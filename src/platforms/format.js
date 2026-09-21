@@ -59,3 +59,33 @@ export function formatAskResult(result, { mention = defaultMention } = {}) {
 function defaultMention(id, fallbackName) {
   return fallbackName || '玩家';
 }
+
+// 普通提问该在提问者消息上打哪个反应（Discord 的 reaction 模式用）。
+//
+// 只有「是 / 不是 / 判断不了」能用单个表情说清，所以这里**只认 answer**：
+//   isYes === true  → ✅
+//   isYes === false → ❌
+//   isYes === null  → 🤔（这个问题暂时判断不了）
+// 其它情况（通关 🎉、各种提示、/ask 的逐句核对）一律返回 null，
+// 由调用方走文本回复——这些内容塞进一个表情里会丢信息。
+export function askReaction(result) {
+  if (!result || result.type !== 'answer') return null;
+  if (result.isYes === true) return '✅';
+  if (result.isYes === false) return '❌';
+  return '🤔';
+}
+
+// 反应模式的总开关（discord.askReplyMode）：
+//   'reaction' → 该打反应就打反应
+//   其它取值（含默认 'reply'）→ 一律返回 null，照旧回一条消息
+// 未知取值按 reply 处理：配置坏了也不该突然改行为。
+export function askReactionFor(mode, result) {
+  return mode === 'reaction' ? askReaction(result) : null;
+}
+
+// 卡片上「回答方式」按钮点一下之后该变成什么：两个值来回切。
+// 未知取值（配置损坏/旧数据）一律切成 reaction——按钮总得有点用，
+// 而且玩家点完能立刻从卡片上看到结果。
+export function nextAnswerMode(mode) {
+  return mode === 'reaction' ? 'reply' : 'reaction';
+}

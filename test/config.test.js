@@ -43,6 +43,7 @@ test('首次运行会生成配置文件，并采用安全默认值', async () =>
   assert.equal(config.judge.provider, 'gateway');
   assert.equal(config.judge.providers.gateway.model, 'typesafe-ai/jev');
   assert.equal(config.discord.enabled, false);
+  assert.equal(config.discord.askReplyMode, 'reply'); // 默认行为和以前一样：直接回复
   assert.equal(config.qq.napcat.enabled, false);
   assert.equal(config.qq.official.enabled, false);
   assert.equal(hasPassword(), false);
@@ -79,6 +80,37 @@ test('未知的评判渠道会被拒绝', async () => {
   assert.equal(r.ok, false);
   assert.ok(r.problems.some((p) => p.includes('judge.provider')));
   assert.equal(config.judge.provider, 'gateway');
+});
+
+test('普通提问的回答方式：可切到 reaction，非法值被拒且退回 reply', async () => {
+  // 切到反应模式
+  let r = await updateConfig({ discord: { askReplyMode: 'reaction' } });
+  assert.equal(r.ok, true, JSON.stringify(r.problems));
+  assert.equal(config.discord.askReplyMode, 'reaction');
+  // 后台读到的也是 reaction（界面下拉要靠它回显）
+  assert.equal(publicConfig().discord.askReplyMode, 'reaction');
+  // 落盘
+  assert.equal(JSON.parse(await readFile(CONFIG_FILE, 'utf8')).discord.askReplyMode, 'reaction');
+
+  // 非法取值：整次保存被拒，已生效的配置不受影响
+  r = await updateConfig({ discord: { askReplyMode: 'shout' } });
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => p.includes('discord.askReplyMode')));
+  assert.equal(config.discord.askReplyMode, 'reaction', '被拒后不应改动生效值');
+
+  // 坏值写进文件时，加载阶段也会退回默认的 reply 并给出问题
+  const problems = [];
+  const coerced = coerceConfig({ discord: { askReplyMode: 'reaction2' } }, problems);
+  assert.equal(coerced.discord.askReplyMode, 'reply');
+  assert.ok(problems.some((p) => p.includes('discord.askReplyMode')));
+
+  // 空值走默认，不会把配置清成非法状态
+  const empty = coerceConfig({ discord: { askReplyMode: '' } }, []);
+  assert.equal(empty.discord.askReplyMode, 'reply');
+
+  // 收尾：切回默认，免得影响后面的用例
+  await updateConfig({ discord: { askReplyMode: 'reply' } });
+  assert.equal(config.discord.askReplyMode, 'reply');
 });
 
 test('切换评判渠道：每个渠道的密钥各自保存', async () => {

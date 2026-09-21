@@ -27,6 +27,16 @@ export class CommandHandler {
       case 'start':
         return { text: this.start(channelKey, userId, userName) };
 
+      case 'card':
+        // 卡片是 Discord 专有的：那边由适配器直接贴出可点击卡片，走不到这里。
+        // 这里是 QQ 渠道（或 Discord 文本兜底）落到这条命令时的说明。
+        return {
+          text:
+            platform === 'discord'
+              ? '卡片没能贴出来，先用 /status 看本局进度，再试一次 /card。'
+              : '交互卡片只有 Discord 有：在那边发 /card 能把卡片重新贴到频道最下面。这里用 /start 看汤面、/status 看进度。',
+        };
+
       case 'ask': {
         const question = args.join(' ').trim();
         if (!question) return { text: '用法：/ask <你的结论>，也可以直接 @我 提问。' };
@@ -49,11 +59,10 @@ export class CommandHandler {
         return { text: this.history(channelKey) };
 
       case 'reveal':
-        return { text: this.reveal(channelKey) };
+        return { text: this.reveal(channelKey, userId) };
 
       case 'reset':
-        this.gm.reset(channelKey);
-        return { text: '🔄 本频道的游戏状态已重置。用 /start 开新的一局。' };
+        return { text: this.reset(channelKey, userId) };
 
       default:
         return { text: `未知命令：/${name}\n发送 /help 查看全部命令。` };
@@ -70,6 +79,43 @@ export class CommandHandler {
     return this.gm.verify(channelKey, userId, userName, message);
   }
 
+  /* ---------- 给 Discord 卡片用的只读入口 ----------
+   *
+   * 卡片是"表现层"：它只读这些状态来渲染，所有改动仍然走下面已有的
+   * next/pick/start/reveal，逻辑不会出现两份。
+   */
+
+  // 题目清单（[{ id, title, puzzle }]），卡片下拉菜单用。
+  // 只带汤面做预览，**绝不带汤底**：汤底只能在开局后由卡片/命令公布。
+  questionList() {
+    return this.qs.listAll().map((q) => ({ id: q.id, title: q.title, puzzle: q.puzzle }));
+  }
+
+  // 当前已选中的题目（含汤面/汤底），没选则为 null
+  currentQuestion(channelKey) {
+    return this.gm.getState(channelKey).question ?? null;
+  }
+
+  // 本局状态摘要（GameManager.status 的薄封装）
+  gameStatus(channelKey) {
+    return this.gm.status(channelKey);
+  }
+
+  // 换题权限（卡片用它判断"这一下能不能点"）
+  canSwitch(channelKey, userId) {
+    return this.gm.canSwitch(channelKey, userId);
+  }
+
+  // 普通提问的回答方式：本频道选过的值优先，没选过用后台配置的默认值
+  answerMode(channelKey) {
+    return this.gm.answerMode(channelKey);
+  }
+
+  // 发起人在卡片上切换回答方式（'reply' 回消息 / 'reaction' 打反应）
+  setAnswerMode(channelKey, mode) {
+    return this.gm.setAnswerMode(channelKey, mode);
+  }
+
   // 提问预检（只看不记额度）：需要提前判断"这条提问会不会被限流"时用
   peekAskBlock(channelKey, userId) {
     return this.gm.peekAskQuota(channelKey, userId);
@@ -83,10 +129,13 @@ export class CommandHandler {
   }
 
   // 换题权限检查：进行中的一局只有发起人能换题
-  denySwitch(channelKey, userId) {
+  // "会把本局冲掉"的动作（换题 / 公布谜底 / 重置）在进行中只有发起人能做。
+  // 并发场景下别人手里可能还攥着一张旧卡片、或直接发命令，光看卡片上的发起人拦不住，
+  // 所以每个入口都在这里过一遍。
+  denySwitch(channelKey, userId, what = '换题') {
     if (this.gm.canSwitch(channelKey, userId)) return null;
     const owner = this.gm.status(channelKey).ownerName;
-    return `🔒 本局正在进行中，只有发起人 ${owner || '（发起人）'} 可以换题。等本局结束后再换，或让 TA 用 /next。`;
+    return `🔒 本局正在进行中，只有发起人 ${owner || '（发起人）'} 可以${what}。等本局结束后再操作，或让 TA 来做。`;
   }
 
   next(channelKey, userId, userName) {
@@ -153,9 +202,26 @@ export class CommandHandler {
     return `📜 提问记录（${title}）：\n${lines}`;
   }
 
-  reveal(channelKey) {
+  // 公布谜底：拿结构化结果（Discord 卡片要用 question.answer 原地渲染）
+  revealModel(channelKey, userId) {
+    const denied = this.denySwitch(channelKey, userId, '公布谜底');
+    if (denied) return { ok: false, msg: denied };
     const r = this.gm.reveal(channelKey);
+    if (!r.ok) return { ok: false, msg: r.msg };
+    return { ok: true, question: r.question };
+  }
+
+  reveal(channelKey, userId) {
+    const r = this.revealModel(channelKey, userId);
     if (!r.ok) return r.msg;
     return `📖 谜底公布：\n\n【汤面】${r.question.puzzle}\n\n【汤底】${r.question.answer}\n\n用 /next 开始新的一局。`;
+  }
+
+  // 重置本频道：进行中的一局同样只有发起人能重置，别让人一句话把别人的局清了
+  reset(channelKey, userId) {
+    const denied = this.denySwitch(channelKey, userId, '重置本局');
+    if (denied) return denied;
+    this.gm.reset(channelKey);
+    return '🔄 本频道的游戏状态已重置。用 /start 开新的一局。';
   }
 }

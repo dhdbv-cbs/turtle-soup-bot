@@ -1,7 +1,7 @@
 // Discord「正在回复中」：立刻显示一次、按 8 秒续期，回复发出后 stop() 收尾。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startTyping, TYPING_REFRESH_MS } from '../src/platforms/typing.js';
+import { startTyping, startTypingFor, TYPING_REFRESH_MS } from '../src/platforms/typing.js';
 
 function stubChannel(sendTyping) {
   const channel = { pings: 0 };
@@ -68,4 +68,31 @@ test('频道对象不完整也不会炸', (t) => {
   const stop = startTyping({});
   assert.doesNotThrow(() => stop());
   assert.doesNotThrow(() => startTyping(undefined)());
+});
+
+/* ---------------- 按回答方式决定要不要显示 ---------------- */
+
+test('反应模式下一律不显示「正在输入…」（连第一次也不发）', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const channel = stubChannel();
+
+  const stop = startTypingFor(channel, 'reaction');
+  assert.equal(channel.pings, 0, '反应模式一次都不能发：状态收不掉，会挂在 ✅ / ❌ 后面');
+
+  t.mock.timers.tick(TYPING_REFRESH_MS * 5);
+  assert.equal(channel.pings, 0, '也不许续期');
+  assert.doesNotThrow(() => stop());
+  assert.doesNotThrow(() => stop());
+});
+
+test('直接回复（或没设置）时照旧显示并续期', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  for (const mode of ['reply', undefined, null, '']) {
+    const channel = stubChannel();
+    const stop = startTypingFor(channel, mode);
+    assert.equal(channel.pings, 1, `${String(mode)} 应该正常显示`);
+    t.mock.timers.tick(TYPING_REFRESH_MS);
+    assert.equal(channel.pings, 2);
+    stop();
+  }
 });

@@ -8,7 +8,9 @@ import { join } from 'node:path';
 const dir = await mkdtemp(join(tmpdir(), 'turtle-help-'));
 process.env.CONFIG_FILE = join(dir, 'config.json');
 
-const { COMMAND_NAMES, defaultHelpText, helpText, channelHelpText } = await import('../src/commands.js');
+const { COMMAND_NAMES, commandsFor, defaultHelpText, helpText, channelHelpText } = await import(
+  '../src/commands.js'
+);
 const { config } = await import('../src/config.js');
 const { ASK_RATE_LIMIT, MAX_PENDING_PER_CHANNEL } = await import('../src/limits.js');
 
@@ -30,8 +32,8 @@ test('每个渠道的 /help 都包含：标题、触发方式、全部命令、�
     assert.match(text, /【常用例子】/, `${p} 缺少例子`);
     assert.match(text, /【怎么玩】/, `${p} 缺少玩法`);
     assert.match(text, /【规则与限制】/, `${p} 缺少限制说明`);
-    for (const name of COMMAND_NAMES) {
-      assert.ok(text.includes(`/${name}`), `${p} 的文案里没有 /${name}`);
+    for (const cmd of commandsFor(p)) {
+      assert.ok(text.includes(`/${cmd.name}`), `${p} 的文案里没有 /${cmd.name}`);
     }
     // 新加的防刷限制必须写清楚，不能只写在代码里
     assert.ok(
@@ -57,6 +59,11 @@ test('三个渠道的说明各自贴合本渠道（不能三份一样）', () =>
   assert.match(official, /被动消息/);
   assert.match(official, /群聊 5 分钟内、每条消息最多回 5 条/);
   assert.match(official, /单聊 60 分钟内、最多回 4 条/);
+
+  // /card 是 Discord 卡片专有命令：只在 Discord 的文案里出现，QQ 两个渠道里不能出现
+  assert.match(discord, /\/card/);
+  assert.doesNotMatch(napcat, /\/card/);
+  assert.doesNotMatch(official, /\/card/);
   assert.match(official, /昵称/);
   assert.notEqual(discord, napcat);
   assert.notEqual(napcat, official);

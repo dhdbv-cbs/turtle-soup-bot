@@ -112,6 +112,37 @@ test('换题会清零参与人数（回归：participants 跨局累加）', asyn
   assert.equal(gm.status('c').participantCount, 1);
 });
 
+test('回答方式：没选过用默认值，选过就记住，非法值不改动', () => {
+  const { gm } = makeGame();
+
+  // 频道还没人切过：用后台配置的默认值（config 默认是 reply）
+  assert.equal(gm.answerMode('c'), 'reply');
+  assert.equal(gm.status('c').answerMode, 'reply', '状态摘要里要带上，卡片按钮靠它显示');
+
+  // 玩家在卡片上切一次
+  assert.deepEqual(gm.setAnswerMode('c', 'reaction'), { ok: true, mode: 'reaction' });
+  assert.equal(gm.answerMode('c'), 'reaction');
+  assert.equal(gm.status('c').answerMode, 'reaction');
+
+  // 非法值：拒绝，且不影响已选的值
+  const bad = gm.setAnswerMode('c', 'shout');
+  assert.equal(bad.ok, false);
+  assert.match(bad.msg, /reply/);
+  assert.equal(gm.answerMode('c'), 'reaction');
+
+  // 换题/开局不影响这个频道的选择（它是这个频道的偏好，不是某一局的）
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+  assert.equal(gm.answerMode('c'), 'reaction');
+
+  // 频道之间互不影响
+  assert.equal(gm.answerMode('其它频道'), 'reply');
+
+  // 切回消息模式也要能生效
+  assert.equal(gm.setAnswerMode('c', 'reply').ok, true);
+  assert.equal(gm.answerMode('c'), 'reply');
+});
+
 test('换题权限：未开局人人可换，进行中只有发起人可换，结束后放开', async () => {
   const { gm } = makeGame([{ isYes: true, yesProb: 1, similarity: 0.9, usage: null }]);
 

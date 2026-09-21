@@ -6,9 +6,15 @@ import { config } from './config.js';
 import { ASK_RATE_LIMIT } from './limits.js';
 
 // 命令表：后台/Discord 注册/帮助文案都从这里取，避免多处各写一份
+// platforms 字段可选：写了就只在该渠道出现（例如 /card 是 Discord 卡片专有）
 export const COMMANDS = [
   { name: 'help', description: '查看这个渠道的用法说明' },
   { name: 'start', description: '开始当前题目，公布汤面' },
+  {
+    name: 'card',
+    description: '把交互卡片重新贴到频道最下面',
+    platforms: ['discord'],
+  },
   {
     name: 'ask',
     description: '提交你的结论：我会逐句核对（对 ✅ 错 ❌）',
@@ -36,6 +42,11 @@ export const COMMANDS = [
 
 export const COMMAND_NAMES = COMMANDS.map((c) => c.name);
 
+// 某个渠道能用哪些命令（/card 只在 Discord 有，其余三个渠道通用）
+export function commandsFor(platform) {
+  return COMMANDS.filter((c) => !c.platforms || c.platforms.includes(platform));
+}
+
 // 渠道标识：discord | napcat | official
 const CHANNEL_TITLE = {
   discord: '🐢 海龟汤机器人 · Discord 用法',
@@ -47,7 +58,9 @@ const CHANNEL_TITLE = {
 const CHANNEL_INTRO = {
   discord: [
     '在输入框里打 / 就能看到下面这些命令（Discord 原生斜杠命令，带参数提示）。',
-    '也可以直接 @我 + 问题 来提问，效果和 /ask 一样；私聊我同样能用。',
+    '也可以直接 @我 + 问题 来提问（默认直接回复「是 / 不是」）；私聊我同样能用。',
+    '想少刷屏就 /start 打开卡片，把「回答方式」换成「用反应」：我会在你提问的那条消息上打 ✅ / ❌。',
+    '卡片被聊天顶上去了就发 /card 重新贴一张到最下面（只有本局发起人能贴）。',
     '/help 只有你自己看得到，不会刷屏。',
   ],
   napcat: [
@@ -63,9 +76,10 @@ const CHANNEL_INTRO = {
   ],
 };
 
-function commandTable() {
-  const width = Math.max(...COMMANDS.map((c) => c.name.length)) + 8;
-  return COMMANDS.map((c) => {
+function commandTable(platform) {
+  const list = commandsFor(platform);
+  const width = Math.max(...list.map((c) => c.name.length)) + 8;
+  return list.map((c) => {
     const usage = c.name === 'ask' ? '/ask <问题>' : c.name === 'pick' ? '/pick <编号>' : `/${c.name}`;
     return `  ${usage.padEnd(width)}${c.description}`;
   }).join('\n');
@@ -75,9 +89,10 @@ function commandTable() {
 const CHANNEL_EXAMPLES = {
   discord: [
     '  /next                    换到下一题',
-    '  /start                   开始这一题，公布汤面',
+    '  /start                   开始这一题，公布汤面（卡片里能切「回答方式」）',
+    '  /card                    卡片被顶上去了？重新贴一张到最下面',
     '  /ask 他是自杀的，他留了遗书   提交结论：逐句核对，对 ✅ 错 ❌',
-    '  @我 他是自杀的吗          提问：我回答「是 / 不是」',
+    '  @我 他是自杀的吗          提问：直接回复「是 / 不是」，或改成用反应打 ✅ / ❌',
     '  /status                  看看本局问到哪了',
   ],
   napcat: [
@@ -127,7 +142,7 @@ export function helpText(platform, { custom } = {}) {
     ...intro,
     '',
     '【命令】',
-    commandTable(),
+    commandTable(platform),
     '',
     '【常用例子】',
     ...examples,

@@ -3,12 +3,18 @@ node_modules/
 
 # 本地配置（含密钥与后台密码），模板见 .env.example
 # 正常使用不需要手改它：所有配置都在后台界面里改
+#
+# 注意：data/ 下除了 config.json，任何新出现的 json 都可能带密钥，
+# 不确定就先 git check-ignore -v <文件> 确认，别直接 git add -A。
 .env
 data/config.json
+# 兜底：配置的其它命名（如按环境区分）同样不入库
+data/config.*.json
 
-# 题目库/配置损坏时的自动备份与临时文件
-data/*.corrupt-*.bak
-data/*.tmp-*
+# 配置/题库损坏时的自动备份与原子写入的临时文件
+# （备份里同样是密钥，所以按后缀一律拦掉，不写具体文件名）
+data/*.bak
+data/*.tmp*
 
 # 日志
 *.log

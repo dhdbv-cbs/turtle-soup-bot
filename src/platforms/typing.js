@@ -43,3 +43,14 @@ export function startTyping(channel, {
     clearIntervalFn(timer);
   };
 }
+
+// 反应模式下**不要**显示「正在输入…」。
+//
+// 原因：Discord 只有"机器人自己发消息"才会让这个状态提前消失，没有取消接口；
+// 而反应模式最后并不发消息（只在那条提问上加 ✅ / ❌），于是输入状态会在答案
+// 已经打上去之后继续挂到 10 秒左右才自己消失——看起来像机器人卡住了。
+// 反应本身就是反馈，所以这条路径干脆不启动它。
+export function startTypingFor(channel, answerMode, opts) {
+  if (answerMode === 'reaction') return () => {};
+  return startTyping(channel, opts);
+}
