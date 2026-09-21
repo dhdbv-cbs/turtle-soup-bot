@@ -1,13 +1,19 @@
 // QQ 官方机器人开放平台适配器
 //
-// 协议要点（据官方文档 https://bot.q.qq.com/wiki/develop/api-v2/ ）：
+// 协议要点（对照官方文档 https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html ）：
 //   1. POST https://bots.qq.com/app/getAppAccessToken  { appId, clientSecret } → { access_token, expires_in }
-//      —— 失败时 HTTP 仍可能是 200，必须检查响应体里有没有 access_token
+//      —— 失败时 HTTP 仍可能是 200，必须检查响应体里有没有 access_token；该接口不分正式/沙箱
 //   2. GET  {apiBase}/gateway  (Authorization: QQBot {access_token}) → { url }
 //   3. WebSocket：op10 Hello → op2 Identify(token 格式 "QQBot {access_token}")
 //      → 按 heartbeat_interval 发 op1 心跳，d 为最近一次收到的 s
-//   4. 群/单聊消息必须"被动回复"：带 msg_id（事件里的 d.id）与递增的 msg_seq
-//      群消息 5 分钟内最多回 5 条，单聊 60 分钟内最多回 4 条
+//   4. 带 msg_id（事件里的 d.id）+ 递增 msg_seq 才算"被动消息"：
+//      有效期 群聊 5 分钟 / 单聊 60 分钟；每条消息可回复次数 群聊 5 次 / 单聊 4 次。
+//   5. 不带 msg_id 的是"主动消息"：官方允许，但有频控（群 60 qpm、单聊 10 qps、每群/每好友
+//      每天 1000 条），且用户可以在资料卡里关掉推送；本机器人只用被动消息，不主动找人。
+//   6. 事件里的 author.username 就是用户昵称（可能为空字符串），为空才用 openid 尾号兜底。
+//   7. 发送接口只有 content / markdown / media 三种内容字段，**没有 @ 某个用户的字段**，
+//      所以回复里只能写昵称，@ 不出来（频道侧才有内嵌格式）。
+//   8. 正式环境默认启用 IP 白名单：只有白名单里的 IP 才能连网关和调 OpenAPI，沙箱不受影响。
 import WebSocket from 'ws';
 import { config } from '../config.js';
 import { formatAskResult } from './format.js';
@@ -24,14 +30,15 @@ const INTENT_GROUP_AND_C2C = 1 << 25;
 const INTENT_PUBLIC_GUILD_MESSAGES = 1 << 30;
 
 const CHUNK_SIZE = 900; // 官方对单条消息长度有限制，保守切分
-const REPLY_BUDGET = { group: 4, c2c: 3, guild: 4 }; // 被动回复条数上限（留出余量）
+// 官方被动消息的回复次数上限：群聊 5 次 / 单聊 4 次（频道不限次数，只限每秒 5 条），这里各留一档余量
+const REPLY_BUDGET = { group: 4, c2c: 3, guild: 4 };
 
 export function startQqOfficial(handler) {
   const cfg = config.qq.official;
   const apiBase = cfg.sandbox ? API_BASE.sandbox : API_BASE.production;
 
   const status = { state: 'connecting', detail: '准备连接' };
-  // 官方接口不支持 @ 语法，只能显示用户名（"群友"+账号尾号）
+  // 官方发送接口没有 @ 字段（只有 content/markdown/media），只能写昵称
   const mention = (_id, name) => name || '玩家';
   let stopped = false;
   let ws = null;
@@ -261,17 +268,18 @@ export function startQqOfficial(handler) {
         await handleMessage({
           target: { kind: 'c2c', id: d.author?.user_openid },
           userId: d.author?.user_openid,
-          userName: displayName('私聊用户', d.author?.user_openid),
+          userName: nickname(d.author?.username, '私聊用户', d.author?.user_openid),
           content: d.content,
           msgId: d.id,
         });
         return;
 
+      // 群里只有 @机器人 才会推这个事件；GROUP_MESSAGE_CREATE（全量模式）需要额外权限，本项目不用
       case 'GROUP_AT_MESSAGE_CREATE':
         await handleMessage({
           target: { kind: 'group', id: d.group_openid },
           userId: d.author?.member_openid,
-          userName: displayName('群友', d.author?.member_openid),
+          userName: nickname(d.author?.username, '群友', d.author?.member_openid),
           content: d.content,
           msgId: d.id,
         });
@@ -281,7 +289,7 @@ export function startQqOfficial(handler) {
         await handleMessage({
           target: { kind: 'guild', id: d.channel_id },
           userId: d.author?.id,
-          userName: d.author?.username || displayName('用户', d.author?.id),
+          userName: nickname(d.author?.username, '用户', d.author?.id),
           content: d.content,
           msgId: d.id,
         });
@@ -292,8 +300,11 @@ export function startQqOfficial(handler) {
     }
   }
 
-  // 官方接口不返回昵称，只能用 openid 尾部做个可区分的显示名
-  function displayName(prefix, id) {
+  // 事件里的 author.username 就是用户昵称（可能为空字符串，如未设置或隐私设置），
+  // 拿不到昵称才退回 openid 尾号拼一个可区分的名字
+  function nickname(username, prefix, id) {
+    const name = String(username || '').trim();
+    if (name) return name;
     const tail = String(id || '')
       .replace(/[^0-9a-zA-Z]/g, '')
       .slice(-4);

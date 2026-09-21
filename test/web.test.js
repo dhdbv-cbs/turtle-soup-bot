@@ -180,7 +180,7 @@ test('/api/config 一并返回三个渠道的内置 /help 文案（后台直接�
   }
   assert.match(d.discord, /原生斜杠命令/);
   assert.match(d.napcat, /@机器人/);
-  assert.match(d.official, /被动回复/);
+  assert.match(d.official, /被动消息/);
   // 内置文案是代码生成的，不算"用户填的配置"
   assert.equal(r.data.config.discord.helpText, '');
 });

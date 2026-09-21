@@ -53,8 +53,11 @@ test('三个渠道的说明各自贴合本渠道（不能三份一样）', () =>
 
   assert.match(discord, /原生斜杠命令/);
   assert.match(napcat, /群里提问请先 @我/);
-  assert.match(official, /被动回复/);
-  assert.match(official, /群友/);
+  // 官方渠道要讲清楚被动消息的时效与次数（官方文档：群 5 分钟 5 次 / 单聊 60 分钟 4 次）
+  assert.match(official, /被动消息/);
+  assert.match(official, /群聊 5 分钟内、每条消息最多回 5 条/);
+  assert.match(official, /单聊 60 分钟内、最多回 4 条/);
+  assert.match(official, /昵称/);
   assert.notEqual(discord, napcat);
   assert.notEqual(napcat, official);
 });

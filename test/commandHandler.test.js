@@ -72,7 +72,7 @@ test('/help 在三个渠道给出各自的用法说明', async () => {
   assert.match(napcat, /NapCat/);
   assert.match(napcat, /@我/);
   assert.match(official, /官方/);
-  assert.match(official, /被动回复/);
+  assert.match(official, /被动消息/);
 
   // 三个渠道的文案必须不一样
   assert.notEqual(discord, napcat);

@@ -195,9 +195,9 @@ const FORMS = {
       { path: 'qq.official.enabled', label: '启用该通道', type: 'bool' },
       { path: 'qq.official.appId', label: 'AppID', type: 'text' },
       { path: 'qq.official.appSecret', label: 'AppSecret', type: 'secret' },
-      { path: 'qq.official.sandbox', label: '使用沙箱环境', type: 'bool', hint: '关闭后使用正式环境（api.sgroup.qq.com）' },
+      { path: 'qq.official.sandbox', label: '使用沙箱环境', type: 'bool', hint: '关闭后使用正式环境（api.sgroup.qq.com）；正式环境必须在开放平台的「开发设置 → IP 白名单」里加上服务器公网 IP，否则连不上网关' },
       { path: 'qq.official.guildMessages', label: '同时接收频道（子频道）@消息', type: 'bool', hint: '需要机器人具备公域消息权限，未开通时可能连不上网关' },
-      { path: 'qq.official.helpText', label: '/help 文案', type: 'long', rows: 16, prefill: 'official', hint: '已经按 QQ 官方的用法填好了（含被动回复条数限制），可以直接改；清空保存则恢复内置文案' },
+      { path: 'qq.official.helpText', label: '/help 文案', type: 'long', rows: 16, prefill: 'official', hint: '已经按官方规则填好了（被动消息的时效与条数），可以直接改；清空保存则恢复内置文案。注意：2026 年起新机器人基本加不进 QQ 群，官方通道更适合单聊' },
     ],
   },
   admin: {
