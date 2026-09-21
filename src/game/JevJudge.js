@@ -31,7 +31,10 @@ export function scoreToSimilarity(score, levels = SIMILARITY_LEVELS.length) {
 }
 
 // 构造给评判模型的 state（题目 + 谜底 + 玩家发言）
-function buildState(question, userMessage) {
+//
+// 逐句核对时**也整段发**：只发单句的话，「我爱海龟汤，它很好喝」里的"它"就没有先行词，
+// Jev 只能硬抠单句字面。整段一起给它，代词和省略的主语才有上下文可依。
+export function buildState(question, userMessage) {
   return (
     `【海龟汤题目（汤面）】\n${question.puzzle}\n\n` +
     `【完整谜底（汤底，仅供评判参考，绝不可向玩家泄露）】\n${question.answer}\n\n` +
@@ -39,16 +42,18 @@ function buildState(question, userMessage) {
   );
 }
 
+const YES_CRITERIA = {
+  true: '谜底明确支持玩家这句话',
+  false: '谜底不支持、与谜底无关，或无法判断',
+};
+
 const QUESTIONS = {
   isYes: {
     type: 'boolean',
     instructions:
       '根据上面的题目和完整谜底，判断玩家这句话所描述的内容是否成立。' +
       '只有当谜底明确支持它为真时才判为是；若为否、与谜底无关、或无法从谜底得出明确结论，都判为否。',
-    criteria: {
-      true: '谜底明确支持玩家这句话',
-      false: '谜底不支持、与谜底无关，或无法判断',
-    },
+    criteria: YES_CRITERIA,
   },
   similarity: {
     type: 'score',
@@ -59,6 +64,36 @@ const QUESTIONS = {
     criteria: SIMILARITY_LEVELS,
   },
 };
+
+/**
+ * 逐句核对的题面：一次调用里给每一句各出一个布尔题（s1、s2…）。
+ *
+ * 关键是要求 Jev **结合【玩家发言】整段**理解这一句：代词（他 / 她 / 它 / 这个）和
+ * 省略的主语都按整段的意思来；同时明确"整段接近谜底"不等于"每一句都成立"。
+ *
+ * @param {string[]} items 拆好的句子
+ * @returns {Record<string, object>} 交给 experimental_evaluate 的 questions
+ */
+export function buildSentenceQuestions(items) {
+  const questions = {};
+  items.forEach((sentence, index) => {
+    questions[`s${index + 1}`] = {
+      type: 'boolean',
+      instructions:
+        `结合【玩家发言】整段的意思，判断其中第 ${index + 1} 句是否成立：「${sentence}」。` +
+        '这一句里的代词（他 / 她 / 它 / 这个）和省略的主语，都按整段的意思来理解，' +
+        '不要孤立地抠这一句的字面；也不要因为整段整体接近谜底，就给这一句判是。' +
+        '只有当谜底明确支持这一句（按上面的理解）时才判为是；' +
+        '若为否、与谜底无关、或无法从谜底得出明确结论，都判为否。',
+      criteria: {
+        true: '按整段语境理解后，谜底明确支持这一句',
+        false: '谜底不支持这一句、与谜底无关，或无法判断',
+      },
+    };
+  });
+  return questions;
+}
+
 
 export class JevJudge {
   constructor() {
@@ -88,43 +123,74 @@ export class JevJudge {
   // 返回 { isYes, yesProb, similarity, usage, failed?, error? }
   // failed = true 表示这次评判没做成（渠道没配好或调用失败），isYes = null
   async judge(question, userMessage) {
+    const r = await this.#evaluate(buildState(question, userMessage), QUESTIONS);
+    if (r.failed) return failure(r.error);
+    const yesProb = yesProbOf(r.answers, 'isYes');
+    return {
+      isYes: yesProb >= config.judge.yesThreshold,
+      yesProb,
+      similarity: scoreToSimilarity(r.answers?.similarity?.score),
+      usage: r.usage,
+      failed: false,
+    };
+  }
+
+  // 逐句核对：**一次调用**判完整段里的所有句子（不是一句一次）。
+  // 整段作为 state 一起发，所以「它 / 他 / 这个」这些代词有上下文；
+  // 返回值里 items 与传入的 items 一一对应。
+  async judgeSentences(question, userMessage, items) {
+    const list = Array.isArray(items) ? items : [];
+    const r = await this.#evaluate(
+      buildState(question, userMessage),
+      buildSentenceQuestions(list),
+    );
+    if (r.failed) return { ...failure(r.error), items: [] };
+
+    return {
+      isYes: null, // 逐句核对不回答"整段是不是成立"，用不到
+      yesProb: 0,
+      similarity: 0,
+      usage: r.usage,
+      failed: false,
+      items: list.map((text, index) => ({
+        text,
+        isYes: yesProbOf(r.answers, `s${index + 1}`) >= config.judge.yesThreshold,
+      })),
+    };
+  }
+
+  // 取模型 → 一次 evaluate → 统一把失败变成 { failed, error }，调用方不用各自 try
+  async #evaluate(state, questions) {
     let model;
     try {
       model = await this.resolveModel();
     } catch (e) {
       error('评判渠道不可用：', e?.message || String(e));
-      return failure(e?.message || String(e));
+      return { failed: true, error: e?.message || String(e) };
     }
 
     try {
       const result = await experimental_evaluate({
         model,
-        state: buildState(question, userMessage),
-        questions: QUESTIONS,
+        state,
+        questions,
         abortSignal: AbortSignal.timeout(JUDGE_TIMEOUT_MS),
       });
-
-      const yesAnswer = result?.answers?.isYes;
-      const simAnswer = result?.answers?.similarity;
-
-      const yesProb = Number.isFinite(yesAnswer?.probability) ? yesAnswer.probability : 0;
-      const similarity = scoreToSimilarity(simAnswer?.score);
-
-      return {
-        isYes: yesProb >= config.judge.yesThreshold,
-        yesProb,
-        similarity,
-        usage: result?.usage || null,
-        failed: false,
-      };
+      return { failed: false, answers: result?.answers || {}, usage: result?.usage || null };
     } catch (e) {
       const msg = e?.name === 'TimeoutError' || e?.name === 'AbortError'
         ? `评判超时（超过 ${JUDGE_TIMEOUT_MS / 1000} 秒）`
         : `评判调用失败：${e?.message || String(e)}`;
       error('评判调用失败：', e?.message || String(e));
-      return failure(msg);
+      return { failed: true, error: msg };
     }
   }
+}
+
+// 某个布尔题判"是"的概率（缺字段/非法值都当 0，不会产生 NaN）
+function yesProbOf(answers, id) {
+  const value = answers?.[id]?.probability;
+  return Number.isFinite(value) ? value : 0;
 }
 
 function failure(message) {

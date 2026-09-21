@@ -13,7 +13,13 @@ for (const key of ['AI_GATEWAY_API_KEY', 'TYPESAFE_API_KEY', 'JUDGE_PROVIDER', '
 }
 
 const { config } = await import('../src/config.js');
-const { JevJudge, scoreToSimilarity, SIMILARITY_LEVELS } = await import('../src/game/JevJudge.js');
+const {
+  JevJudge,
+  scoreToSimilarity,
+  SIMILARITY_LEVELS,
+  buildState,
+  buildSentenceQuestions,
+} = await import('../src/game/JevJudge.js');
 
 test('score 分数归一化到 0~1', () => {
   assert.equal(scoreToSimilarity(0), 0);
@@ -33,6 +39,47 @@ test('越界或非法 score 一律夹取，不会产生 NaN/越界相似度', ()
 
 test('相似度等级表至少 2 级（score 题型要求）', () => {
   assert.ok(SIMILARITY_LEVELS.length >= 2);
+});
+
+test('逐句核对：整段一起发给 Jev，代词才有先行词（回归：硬抠单句）', () => {
+  const question = { puzzle: '汤面', answer: '汤底' };
+  const full = '我爱海龟汤，它很好喝';
+  const state = buildState(question, full);
+
+  // 整段在 state 里，Jev 能看到"它"指的是海龟汤
+  assert.match(state, /【玩家发言】\n我爱海龟汤，它很好喝/);
+  assert.match(state, /【完整谜底/);
+
+  const questions = buildSentenceQuestions(['我爱海龟汤', '它很好喝']);
+  const ids = Object.keys(questions);
+  assert.deepEqual(ids, ['s1', 's2'], '每句一个问题，都在同一次调用里');
+
+  for (const id of ids) {
+    assert.equal(questions[id].type, 'boolean');
+    // AI SDK 的校验：boolean 题的 criteria 只允许 true / false 两个键
+    assert.deepEqual(Object.keys(questions[id].criteria).sort(), ['false', 'true']);
+  }
+
+  // 题面必须写明"结合整段理解代词/省略"，并把这句原文带上
+  assert.match(questions.s2.instructions, /它很好喝/);
+  assert.match(questions.s2.instructions, /整段/);
+  assert.match(questions.s2.instructions, /代词/);
+  assert.match(questions.s2.instructions, /省略的主语/);
+  // 也要求别因为整段接近谜底就给单句判是
+  assert.match(questions.s2.instructions, /不要因为整段整体接近谜底/);
+  assert.match(questions.s1.instructions, /第 1 句/);
+  assert.match(questions.s2.instructions, /第 2 句/);
+});
+
+test('judgeSentences 走同一条"没配 Key 就失败"的路，不联网', async () => {
+  const judge = new JevJudge();
+  const r = await judge.judgeSentences({ puzzle: '汤面', answer: '汤底' }, '我爱海龟汤，它很好喝', [
+    '我爱海龟汤',
+    '它很好喝',
+  ]);
+  assert.equal(r.failed, true);
+  assert.match(r.error, /API Key/);
+  assert.deepEqual(r.items, []);
 });
 
 test('没配 API Key 时：明确失败、给出原因、不联网、不抛异常', async () => {

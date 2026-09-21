@@ -1,9 +1,10 @@
 // 游戏管理器：多人海龟汤，按频道/群隔离状态
 //
 // 两种问法共用一条流水线（拦截 → 防刷 → 频道串行队列 → 评判 → 通关判定）：
-//   ask()    —— @我 提问：回答「是 / 不是」
-//   verify() —— /ask 提交结论：整段先判一次（定通关），没通关再把这段话拆成
-//               一句一句核对，回复成 ✅/❌ 清单（拆句见 game/sentences.js）
+//   ask()    —— @我 提问：回答「是 / 不是」（1 次评判调用）
+//   verify() —— /ask 提交结论：整段先判一次（定通关），没通关再把它拆成一句一句核对
+//               ——拆句在本地做，逐句核对自己只有 **1 次调用**（整段一起发给 Jev，
+//               代词/省略才有上下文），回复成 ✅/❌ 清单（见 game/sentences.js）
 //
 // 并发兜底（同时有几个团体在玩、或同一个群里多人同时提问时）：
 //   1. 状态按 channelKey 隔离（channelKey 带平台前缀），不同群/频道互不影响；
@@ -256,11 +257,20 @@ export class GameManager {
     this.#drain(channelKey);
   }
 
-  // 单条评判：全局最多 8 条同时跑，多的在这里排队等名额
+  // 单条评判（整段）：全局最多 8 条同时跑，多的在这里排队等名额
   async #judgeOnce(question, text) {
+    return this.#withJudgeSlot(() => this.judge.judge(question, text));
+  }
+
+  // 逐句核对：整段 + 所有句子**一次调用**判完（不是一句一次调用）
+  async #judgeSentencesOnce(question, text, items) {
+    return this.#withJudgeSlot(() => this.judge.judgeSentences(question, text, items));
+  }
+
+  async #withJudgeSlot(run) {
     await this.#acquireJudgeSlot();
     try {
-      return await this.judge.judge(question, text);
+      return await run();
     } finally {
       this.#releaseJudgeSlot();
     }
@@ -289,24 +299,23 @@ export class GameManager {
     const question = s.question;
     s.participants.add(String(userId));
 
-    // 整段先判一次：相似度决定是否通关（和「是/不是」模式同一套判定）。
-    // 单句提交时这一次的结果就直接当核对结果用，不重复调用模型。
+    // 整段先判一次：相似度决定是否通关（和「是/不是」模式同一套判定，没动它）
     const whole = await this.#judgeOnce(question, trimmed);
     if (whole.failed) return this.#judgeFailed(userId, whole);
 
-    // 逐句核对只在没通关时才做：已经公布谜底了就不用再逐句报一遍
+    // 逐句核对只在没通关时才做：谜底都公布了就不用再逐句报一遍。
+    // 整段一起发给 Jev，**一次调用**判完所有句子（不是一句一次），
+    // 所以「我爱海龟汤，它很好喝」里的"它"有先行词，不会被硬抠成孤立的单句。
+    // 单句提交时连这一次都不用：整段那次的结果就是这一句的结果。
     const verdicts = [];
     if (verify && whole.similarity < this.winThreshold) {
       const items = splitSentences(trimmed, { max: MAX_VERIFY_SENTENCES });
       if (items.length === 1) {
         verdicts.push({ text: items[0], isYes: whole.isYes });
       } else {
-        // 一句一次评判，串行跑：别为了一条结论同时打出一堆请求
-        for (const item of items) {
-          const r = await this.#judgeOnce(question, item);
-          if (r.failed) return this.#judgeFailed(userId, r);
-          verdicts.push({ text: item, isYes: r.isYes });
-        }
+        const r = await this.#judgeSentencesOnce(question, trimmed, items);
+        if (r.failed) return this.#judgeFailed(userId, r);
+        verdicts.push(...r.items);
       }
     }
 

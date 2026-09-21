@@ -29,6 +29,19 @@ async function setup(judgeResults = []) {
     async judge() {
       return judgeResults.shift() || { isYes: true, yesProb: 0.9, similarity: 0.1, usage: null };
     },
+    // 逐句核对：一次调用判完所有句子（这里偶数序号的句子判 ✅，方便断言）
+    async judgeSentences(question, message, items) {
+      const next = judgeResults.shift();
+      if (next?.failed) return { ...next, items: [] };
+      return {
+        isYes: null,
+        yesProb: 0,
+        similarity: 0,
+        usage: null,
+        failed: false,
+        items: items.map((text, i) => ({ text, isYes: i % 2 === 0 })),
+      };
+    },
   };
   const gm = new GameManager(judge, { winThreshold: 0.8 });
   return { qs, gm, handler: new CommandHandler(gm, qs) };

@@ -6,13 +6,32 @@ import { GameManager } from '../src/game/GameManager.js';
 const Q1 = { id: 1, title: '一', puzzle: '汤面1', answer: '汤底1' };
 const Q2 = { id: 2, title: '二', puzzle: '汤面2', answer: '汤底2' };
 
+const OK = { isYes: true, yesProb: 0.9, similarity: 0.1, usage: null };
+
 function stubJudge(sequence = []) {
-  const calls = [];
+  const calls = []; // 整段 / 「是-不是」评判
+  const sentenceCalls = []; // 逐句核对（一次调用判完所有句子）
   return {
     calls,
+    sentenceCalls,
     async judge(question, message) {
       calls.push({ question, message });
-      return sequence.shift() || { isYes: true, yesProb: 0.9, similarity: 0.1, usage: null };
+      return sequence.shift() || OK;
+    },
+    async judgeSentences(question, message, items) {
+      sentenceCalls.push({ question, message, items });
+      const next = sequence.shift();
+      if (next?.failed) return { ...next, items: [] };
+      return {
+        isYes: null,
+        yesProb: 0,
+        similarity: 0,
+        usage: null,
+        failed: false,
+        // 桩里默认每句都判 ✅，测试想指定结果就传 { items: [...] }
+        items: items.map((text) => ({ text, isYes: true })),
+        ...next,
+      };
     },
   };
 }
@@ -149,19 +168,24 @@ test('状态按频道隔离', async () => {
 
 /* ---------------- /ask：提交结论，逐句核对 ---------------- */
 
-test('/ask 多句结论：拆开逐句判，对的 ✅ 错的 ❌', async () => {
+test('/ask 多句结论：整段一次 + 逐句一次（不是一句一次），对的 ✅ 错的 ❌', async () => {
   const { judge, gm } = makeGame([
-    // 第 1 次：整段（用来判是否通关）
+    // 第 1 次调用：整段（用来判是否通关）
     { isYes: false, yesProb: 0.1, similarity: 0.3, usage: null },
-    // 之后：逐句
-    { isYes: true, yesProb: 0.9, similarity: 0.2, usage: null },
-    { isYes: false, yesProb: 0.1, similarity: 0.1, usage: null },
-    { isYes: true, yesProb: 0.8, similarity: 0.2, usage: null },
+    // 第 2 次调用：整段 + 三句，一次判完
+    {
+      items: [
+        { text: '他是自杀的', isYes: true },
+        { text: '凶手是医生', isYes: false },
+        { text: '他留了遗书', isYes: true },
+      ],
+    },
   ]);
   gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
   gm.start('c', 'u1', 'A');
 
-  const r = await gm.verify('c', 'u2', 'B', '他是自杀的，凶手是医生，他留了遗书');
+  const conclusion = '他是自杀的，凶手是医生，他留了遗书';
+  const r = await gm.verify('c', 'u2', 'B', conclusion);
   assert.equal(r.type, 'verify');
   assert.equal(r.asker, 'B');
   assert.equal(r.askerId, 'u2');
@@ -171,22 +195,35 @@ test('/ask 多句结论：拆开逐句判，对的 ✅ 错的 ❌', async () => 
     { text: '他留了遗书', isYes: true },
   ]);
 
-  // 评判顺序：先整段，再一句一次，共 4 次
-  assert.equal(judge.calls.length, 4);
-  assert.equal(judge.calls[0].message, '他是自杀的，凶手是医生，他留了遗书');
-  assert.deepEqual(
-    judge.calls.slice(1).map((c) => c.message),
-    ['他是自杀的', '凶手是医生', '他留了遗书'],
-  );
+  // 整段一次 + 逐句一次 = 一共 2 次调用，不随句数增长
+  assert.equal(judge.calls.length, 1);
+  assert.equal(judge.calls[0].message, conclusion);
+  assert.equal(judge.sentenceCalls.length, 1);
+  assert.equal(judge.sentenceCalls[0].message, conclusion, '整段要一起发过去，代词才有先行词');
+  assert.deepEqual(judge.sentenceCalls[0].items, ['他是自杀的', '凶手是医生', '他留了遗书']);
 
   // 历史里记的是「是不是每句都对」，且记下拆了几句
   const last = gm.history('c').at(-1);
   assert.equal(last.isYes, false);
   assert.equal(last.sentences, 3);
-  assert.equal(last.message, '他是自杀的，凶手是医生，他留了遗书');
+  assert.equal(last.message, conclusion);
   // 玩家看不到任何分数
   assert.equal(r.similarity, undefined);
   assert.equal(r.yesProb, undefined);
+});
+
+test('/ask 拆满 6 句也只发起一次逐句调用', async () => {
+  const { judge, gm } = makeGame([
+    { isYes: false, yesProb: 0.1, similarity: 0.2, usage: null },
+  ]);
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+
+  const r = await gm.verify('c', 'u1', 'A', '一句甲。一句乙。一句丙。一句丁。一句戊。一句己。一句庚。');
+  assert.equal(r.items.length, 6);
+  assert.equal(judge.calls.length, 1);
+  assert.equal(judge.sentenceCalls.length, 1, '6 句也只调用一次');
+  assert.equal(judge.sentenceCalls[0].items.length, 6);
 });
 
 test('/ask 单句只评判一次，不会重复调用模型', async () => {
@@ -197,9 +234,10 @@ test('/ask 单句只评判一次，不会重复调用模型', async () => {
   const r = await gm.verify('c', 'u1', 'A', '他是自杀的');
   assert.deepEqual(r.items, [{ text: '他是自杀的', isYes: true }]);
   assert.equal(judge.calls.length, 1);
+  assert.equal(judge.sentenceCalls.length, 0, '单句不用再单独核对一次');
 });
 
-test('/ask 说中谜底就直接通关，不再逐句核对', async () => {
+test('/ask 说中谜底就直接通关，不做逐句核对', async () => {
   const { judge, gm } = makeGame([{ isYes: true, yesProb: 0.9, similarity: 0.9, usage: null }]);
   gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
   gm.start('c', 'u1', 'A');
@@ -208,14 +246,14 @@ test('/ask 说中谜底就直接通关，不再逐句核对', async () => {
   assert.equal(r.type, 'win');
   assert.equal(r.question.answer, '汤底1');
   assert.equal(judge.calls.length, 1, '通关只需整段那一次');
+  assert.equal(judge.sentenceCalls.length, 0, '谜底都公布了就不用逐句报一遍');
   assert.equal(gm.status('c').winner.userName, 'B');
 });
 
-test('/ask 逐句过程中评判失败：提示失败，不写历史', async () => {
+test('/ask 逐句核对失败：提示失败，不写历史', async () => {
   const { gm } = makeGame([
     { isYes: false, yesProb: 0.1, similarity: 0.2, usage: null },
-    { isYes: true, yesProb: 0.9, similarity: 0.2, usage: null },
-    { isYes: null, yesProb: 0, similarity: 0, usage: null, failed: true, error: '评判超时' },
+    { failed: true, error: '评判超时' },
   ]);
   gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
   gm.start('c', 'u1', 'A');
