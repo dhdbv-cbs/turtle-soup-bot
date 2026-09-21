@@ -1,0 +1,24 @@
+{
+  "name": "turtle-soup-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "海龟汤机器人 · Discord + QQ(OneBot v11) 双平台 · Jev 评判",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "lint": "node scripts/lint.mjs",
+    "test": "node --test",
+    "check": "npm run lint && npm test"
+  },
+  "dependencies": {
+    "ai": "^7.0.107",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.3",
+    "ws": "^8.21.3"
+  }
+}
