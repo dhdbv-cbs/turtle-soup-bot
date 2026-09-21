@@ -32,6 +32,17 @@ agentsshcli upload --connection <你的连接> --local .\turtle-soup-bot-<sha>.t
 # 或者： scp -P <端口> -i <私钥> .\turtle-soup-bot-<sha>.tar.gz root@<地址>:/tmp/
 ```
 
+> **VPS 上还没有 `deploy/` 时**（第一次用，或刚从桌面搬进仓库）：先把它传一次，
+> 之后每次升级都能直接在 VPS 上跑这些脚本。
+>
+> ```
+> agentsshcli upload --recursive --connection <你的连接> --local deploy --remote /opt/1panel/apps/turtle-soup-bot/deploy
+> ```
+>
+> 不想传也行：把下面几条命令换成在本地发起执行，例如
+> `agentsshcli exec --connection <你的连接> --command-file deploy/install.sh`
+> （那样脚本里要写死包路径，或者把包名改成参数传进去）。
+
 ```bash
 # ③ VPS：先看此刻有没有人在玩（提问不写日志，所以要看频道消息）
 TS_WATCH_CHANNELS="<频道id1>,<频道id2>" bash /opt/1panel/apps/turtle-soup-bot/deploy/check-activity.sh
