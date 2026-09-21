@@ -1,5 +1,10 @@
 // 游戏管理器：多人海龟汤，按频道/群隔离状态
 //
+// 两种问法共用一条流水线（拦截 → 防刷 → 频道串行队列 → 评判 → 通关判定）：
+//   ask()    —— @我 提问：回答「是 / 不是」
+//   verify() —— /ask 提交结论：整段先判一次（定通关），没通关再把这段话拆成
+//               一句一句核对，回复成 ✅/❌ 清单（拆句见 game/sentences.js）
+//
 // 并发兜底（同时有几个团体在玩、或同一个群里多人同时提问时）：
 //   1. 状态按 channelKey 隔离（channelKey 带平台前缀），不同群/频道互不影响；
 //   2. 同一个频道里的提问串行处理（队列 + 上限），答题顺序与提问顺序一致，
@@ -9,12 +14,14 @@
 //   4. 状态表有上限，长期没人玩的频道会被回收，开很多群也不会无限涨内存。
 import { config } from '../config.js';
 import { log, warn } from '../utils/logger.js';
+import { splitSentences } from './sentences.js';
 import {
   ASK_RATE_LIMIT,
   ASK_RATE_WINDOW_MS,
   MAX_CHANNELS,
   MAX_CONCURRENT_JUDGES,
   MAX_PENDING_PER_CHANNEL,
+  MAX_VERIFY_SENTENCES,
   PRUNE_INTERVAL_MS,
   STATE_IDLE_MS,
 } from '../limits.js';
@@ -151,17 +158,30 @@ export class GameManager {
     return null;
   }
 
-  // 处理玩家提问（多人：任何人都可以问）
+  // 处理玩家提问（多人：任何人都可以问）——回答「是 / 不是」
   async ask(channelKey, userId, userName, message) {
+    return this.#enqueueAsk(channelKey, userId, userName, message, { verify: false });
+  }
+
+  // 提交结论（/ask）：把这段话拆成一句一句核对，对的 ✅、错的 ❌
+  async verify(channelKey, userId, userName, message) {
+    return this.#enqueueAsk(channelKey, userId, userName, message, { verify: true });
+  }
+
+  // 提问的公共入口：先快速拦截 + 防刷，再进本频道的串行队列
+  async #enqueueAsk(channelKey, userId, userName, message, { verify }) {
     const s = this.getState(channelKey);
     const blocked = this.#blocked(s);
     if (blocked) return blocked;
-    // 防刷：每人每分钟最多 6 次。放在入队之前，免得刷屏把队列也占满
+    // 防刷：每人每分钟最多 6 次。放在入队之前，免得刷屏把队列也占满。
+    // 逐句核对一条会发起多次评判调用，但仍然只记 1 次额度：长结论不该被罚
     const limited = this.consumeAskQuota(channelKey, userId);
     if (limited) return limited;
     // 记住排队时是哪一局：排队期间换了题，这条提问就不该拿去评判新题目
     const queuedRound = s.roundId;
-    return this.#enqueue(channelKey, () => this.#askNow(channelKey, userId, userName, message, queuedRound));
+    return this.#enqueue(channelKey, () =>
+      this.#askNow(channelKey, userId, userName, message, queuedRound, verify),
+    );
   }
 
   // 只看不记：返回该用户当前是否已被限流（供需要提前判断的调用方使用）
@@ -236,7 +256,26 @@ export class GameManager {
     this.#drain(channelKey);
   }
 
-  async #askNow(channelKey, userId, userName, message, queuedRound) {
+  // 单条评判：全局最多 8 条同时跑，多的在这里排队等名额
+  async #judgeOnce(question, text) {
+    await this.#acquireJudgeSlot();
+    try {
+      return await this.judge.judge(question, text);
+    } finally {
+      this.#releaseJudgeSlot();
+    }
+  }
+
+  // 评判渠道没配好或调用失败：不记入历史，直接把原因告诉玩家
+  #judgeFailed(userId, judge) {
+    return {
+      type: 'hint',
+      userId: String(userId),
+      text: `⚠️ 评判失败：${judge.error}\n（管理员可到后台界面「评判模型」里检查配置）`,
+    };
+  }
+
+  async #askNow(channelKey, userId, userName, message, queuedRound, verify = false) {
     // 排队期间状态可能已经变了（通关/换题/reset），执行时重新取一次
     const s = this.getState(channelKey);
     if (s.roundId !== queuedRound) return this.#staleHint(userId);
@@ -250,22 +289,25 @@ export class GameManager {
     const question = s.question;
     s.participants.add(String(userId));
 
-    // 调用评判模型（可能几秒到几十秒）：全局最多 8 条同时跑，多的在频道队列里等
-    await this.#acquireJudgeSlot();
-    let judge;
-    try {
-      judge = await this.judge.judge(question, trimmed);
-    } finally {
-      this.#releaseJudgeSlot();
-    }
+    // 整段先判一次：相似度决定是否通关（和「是/不是」模式同一套判定）。
+    // 单句提交时这一次的结果就直接当核对结果用，不重复调用模型。
+    const whole = await this.#judgeOnce(question, trimmed);
+    if (whole.failed) return this.#judgeFailed(userId, whole);
 
-    // 评判渠道没配好或调用失败：不记入历史，直接把原因告诉玩家
-    if (judge.failed) {
-      return {
-        type: 'hint',
-        userId: String(userId),
-        text: `⚠️ 评判失败：${judge.error}\n（管理员可到后台界面「评判模型」里检查配置）`,
-      };
+    // 逐句核对只在没通关时才做：已经公布谜底了就不用再逐句报一遍
+    const verdicts = [];
+    if (verify && whole.similarity < this.winThreshold) {
+      const items = splitSentences(trimmed, { max: MAX_VERIFY_SENTENCES });
+      if (items.length === 1) {
+        verdicts.push({ text: items[0], isYes: whole.isYes });
+      } else {
+        // 一句一次评判，串行跑：别为了一条结论同时打出一堆请求
+        for (const item of items) {
+          const r = await this.#judgeOnce(question, item);
+          if (r.failed) return this.#judgeFailed(userId, r);
+          verdicts.push({ text: item, isYes: r.isYes });
+        }
+      }
     }
 
     // 评判期间题目被换掉/重置了：这条结果已经对不上任何题目，直接丢弃
@@ -279,40 +321,52 @@ export class GameManager {
       userId: String(userId),
       userName,
       message: trimmed,
-      isYes: judge.isYes,
-      yesProb: judge.yesProb,
-      similarity: judge.similarity,
+      // 逐句核对时，"是不是"记成"是不是每句都对"，/history 里才不会误导
+      isYes: verdicts.length > 1 ? verdicts.every((v) => v.isYes) : whole.isYes,
+      yesProb: whole.yesProb,
+      similarity: whole.similarity,
+      sentences: verdicts.length || 1,
       ts: Date.now(),
     });
 
     // 胜利判定：与谜底的相似度达到阈值
-    if (judge.similarity >= this.winThreshold) {
+    if (whole.similarity >= this.winThreshold) {
       s.winner = {
         userId: String(userId),
         userName,
         message: trimmed,
-        similarity: judge.similarity,
+        similarity: whole.similarity,
       };
       s.revealed = true;
       log(
-        `[${channelKey}] 通关！由 ${userName} 揭示谜底（相似度 ${(judge.similarity * 100).toFixed(0)}%）`,
+        `[${channelKey}] 通关！由 ${userName} 揭示谜底（相似度 ${(whole.similarity * 100).toFixed(0)}%）`,
       );
       return {
         type: 'win',
         userId: String(userId),
         userName,
-        similarity: judge.similarity,
+        similarity: whole.similarity,
         question: s.question,
         history: [...s.history],
         participantCount: s.participants.size,
       };
     }
 
-    // 普通是/不是回复
+    // /ask：逐句核对清单（对 ✅ 错 ❌）
+    if (verify) {
+      return {
+        type: 'verify',
+        items: verdicts.map((v) => ({ text: v.text, isYes: v.isYes === true })),
+        asker: userName,
+        askerId: String(userId),
+      };
+    }
+
+    // 普通提问：是 / 不是
     let answer;
-    if (judge.isYes === null) {
+    if (whole.isYes === null) {
       answer = '🤔 这个问题暂时无法判断，换个问法试试。';
-    } else if (judge.isYes) {
+    } else if (whole.isYes) {
       answer = '✅ 是。';
     } else {
       answer = '❌ 不是。';
@@ -320,9 +374,9 @@ export class GameManager {
     return {
       type: 'answer',
       answer,
-      isYes: judge.isYes,
-      yesProb: judge.yesProb,
-      similarity: judge.similarity,
+      isYes: whole.isYes,
+      yesProb: whole.yesProb,
+      similarity: whole.similarity,
       asker: userName,
       askerId: String(userId),
     };

@@ -10,6 +10,10 @@ export const ASK_RATE_WINDOW_MS = 60 * 1000;
 // 同一个频道里最多排队的提问数（不含正在评判的那一条）
 export const MAX_PENDING_PER_CHANNEL = 3;
 
+// /ask 提交结论时最多拆成几句逐句核对（多出来的部分并到最后一句，不丢内容）。
+// 每一句都是一次评判调用，所以要有上限；拆句规则见 game/sentences.js
+export const MAX_VERIFY_SENTENCES = 6;
+
 // 全服同时进行的评判上限（跨频道），超出的留在各自频道队列里等
 export const MAX_CONCURRENT_JUDGES = 8;
 

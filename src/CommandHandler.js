@@ -29,8 +29,8 @@ export class CommandHandler {
 
       case 'ask': {
         const question = args.join(' ').trim();
-        if (!question) return { text: '用法：/ask <你的问题>，也可以直接 @我 提问。' };
-        return { ask: await this.handleAsk(channelKey, userId, userName, question) };
+        if (!question) return { text: '用法：/ask <你的结论>，也可以直接 @我 提问。' };
+        return { ask: await this.handleVerify(channelKey, userId, userName, question) };
       }
 
       case 'list':
@@ -60,9 +60,14 @@ export class CommandHandler {
     }
   }
 
-  // 处理提问（@机器人 或 /ask）
+  // 处理提问（@机器人 或 直接提问）：回答「是 / 不是」
   async handleAsk(channelKey, userId, userName, message) {
     return this.gm.ask(channelKey, userId, userName, message);
+  }
+
+  // 处理 /ask：提交结论，逐句核对（对 ✅ 错 ❌）
+  async handleVerify(channelKey, userId, userName, message) {
+    return this.gm.verify(channelKey, userId, userName, message);
   }
 
   // 提问预检（只看不记额度）：需要提前判断"这条提问会不会被限流"时用
@@ -110,8 +115,9 @@ export class CommandHandler {
     return (
       `🎮 第 #${q.id} 题：${q.title}\n\n` +
       `【汤面】\n${q.puzzle}\n\n` +
-      `游戏开始！大家可以直接提问（Discord 用 /ask 或 @我，QQ 群里先 @我），我只回答「是」或「不是」。` +
-      `当有人问到跟谜底吻合时，就是集体通关。`
+      `游戏开始！提问直接 @我（Discord 也可以用 /ask），我只回答「是」或「不是」；` +
+      `想一次说完整结论就用 /ask，我会拆成一句一句核对，对的 ✅、错的 ❌。` +
+      `当有人说中跟谜底吻合的内容时，就是集体通关。`
     );
   }
 

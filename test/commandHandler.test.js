@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { QuestionStore } from '../src/game/QuestionStore.js';
 import { GameManager } from '../src/game/GameManager.js';
 import { CommandHandler } from '../src/CommandHandler.js';
+import { formatAskResult } from '../src/platforms/format.js';
 import { COMMANDS, channelHelpText, parseCommand } from '../src/commands.js';
 
 async function setup(judgeResults = []) {
@@ -135,18 +136,47 @@ test('未知命令给出帮助指引', async () => {
   assert.match(r.text, /\/help/);
 });
 
-test('/ask 返回待格式化的评判结果，空问题给用法提示', async () => {
-  const { handler } = await setup();
+test('/ask 是"提交结论"：逐句核对后打勾打叉，空内容给用法提示', async () => {
+  const { handler } = await setup([
+    // 整段（判是否通关）
+    { isYes: false, yesProb: 0.1, similarity: 0.2, usage: null },
+    // 逐句
+    { isYes: true, yesProb: 0.9, similarity: 0.2, usage: null },
+    { isYes: false, yesProb: 0.1, similarity: 0.1, usage: null },
+  ]);
   await handler.handle('c', 'u1', 'A', '/pick 1');
   await handler.handle('c', 'u1', 'A', '/start');
 
   const empty = await handler.handle('c', 'u1', 'A', '/ask');
   assert.match(empty.text, /用法：\/ask/);
 
-  const r = await handler.handle('c', 'u1', 'A', '/ask 他是被谋杀的吗');
+  const r = await handler.handle('c', 'u1', 'A', '/ask 他是自杀的，凶手是医生');
   assert.ok(r.ask, '应返回 ask 结果交给适配器格式化');
-  assert.equal(r.ask.type, 'answer');
+  assert.equal(r.ask.type, 'verify');
   assert.equal(r.ask.asker, 'A');
+  assert.deepEqual(r.ask.items, [
+    { text: '他是自杀的', isYes: true },
+    { text: '凶手是医生', isYes: false },
+  ]);
+
+  // 适配器格式化后：逐句打勾打叉，且不泄露任何分数
+  const { text, users } = formatAskResult(r.ask, { mention: (id) => `[CQ:at,qq=${id}]` });
+  assert.deepEqual(users, ['u1']);
+  assert.equal(text, '[CQ:at,qq=u1]：\n🧾 逐句核对（2 句）\n✅ 他是自杀的\n❌ 凶手是医生');
+  assert.doesNotMatch(text, /%|相似度|\d\.\d/);
+});
+
+test('@我 提问仍然是「是 / 不是」，没有被 /ask 改掉', async () => {
+  const { handler } = await setup([{ isYes: false, yesProb: 0.1, similarity: 0.2, usage: null }]);
+  await handler.handle('c', 'u1', 'A', '/pick 1');
+  await handler.handle('c', 'u1', 'A', '/start');
+
+  const r = await handler.handleAsk('c', 'u1', 'A', '他是被谋杀的吗');
+  assert.equal(r.type, 'answer');
+  assert.equal(r.answer, '❌ 不是。');
+
+  const { text } = formatAskResult(r, { mention: (id) => `[CQ:at,qq=${id}]` });
+  assert.equal(text, '[CQ:at,qq=u1]：❌ 不是。');
 });
 
 test('换题权限：进行中只有本局发起人能换题', async () => {

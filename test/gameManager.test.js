@@ -146,3 +146,113 @@ test('状态按频道隔离', async () => {
   assert.equal(gm.status('c1').started, true);
   assert.equal(gm.status('c2').hasQuestion, false);
 });
+
+/* ---------------- /ask：提交结论，逐句核对 ---------------- */
+
+test('/ask 多句结论：拆开逐句判，对的 ✅ 错的 ❌', async () => {
+  const { judge, gm } = makeGame([
+    // 第 1 次：整段（用来判是否通关）
+    { isYes: false, yesProb: 0.1, similarity: 0.3, usage: null },
+    // 之后：逐句
+    { isYes: true, yesProb: 0.9, similarity: 0.2, usage: null },
+    { isYes: false, yesProb: 0.1, similarity: 0.1, usage: null },
+    { isYes: true, yesProb: 0.8, similarity: 0.2, usage: null },
+  ]);
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+
+  const r = await gm.verify('c', 'u2', 'B', '他是自杀的，凶手是医生，他留了遗书');
+  assert.equal(r.type, 'verify');
+  assert.equal(r.asker, 'B');
+  assert.equal(r.askerId, 'u2');
+  assert.deepEqual(r.items, [
+    { text: '他是自杀的', isYes: true },
+    { text: '凶手是医生', isYes: false },
+    { text: '他留了遗书', isYes: true },
+  ]);
+
+  // 评判顺序：先整段，再一句一次，共 4 次
+  assert.equal(judge.calls.length, 4);
+  assert.equal(judge.calls[0].message, '他是自杀的，凶手是医生，他留了遗书');
+  assert.deepEqual(
+    judge.calls.slice(1).map((c) => c.message),
+    ['他是自杀的', '凶手是医生', '他留了遗书'],
+  );
+
+  // 历史里记的是「是不是每句都对」，且记下拆了几句
+  const last = gm.history('c').at(-1);
+  assert.equal(last.isYes, false);
+  assert.equal(last.sentences, 3);
+  assert.equal(last.message, '他是自杀的，凶手是医生，他留了遗书');
+  // 玩家看不到任何分数
+  assert.equal(r.similarity, undefined);
+  assert.equal(r.yesProb, undefined);
+});
+
+test('/ask 单句只评判一次，不会重复调用模型', async () => {
+  const { judge, gm } = makeGame([{ isYes: true, yesProb: 0.9, similarity: 0.3, usage: null }]);
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+
+  const r = await gm.verify('c', 'u1', 'A', '他是自杀的');
+  assert.deepEqual(r.items, [{ text: '他是自杀的', isYes: true }]);
+  assert.equal(judge.calls.length, 1);
+});
+
+test('/ask 说中谜底就直接通关，不再逐句核对', async () => {
+  const { judge, gm } = makeGame([{ isYes: true, yesProb: 0.9, similarity: 0.9, usage: null }]);
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+
+  const r = await gm.verify('c', 'u2', 'B', '他是自杀的。他留了遗书。');
+  assert.equal(r.type, 'win');
+  assert.equal(r.question.answer, '汤底1');
+  assert.equal(judge.calls.length, 1, '通关只需整段那一次');
+  assert.equal(gm.status('c').winner.userName, 'B');
+});
+
+test('/ask 逐句过程中评判失败：提示失败，不写历史', async () => {
+  const { gm } = makeGame([
+    { isYes: false, yesProb: 0.1, similarity: 0.2, usage: null },
+    { isYes: true, yesProb: 0.9, similarity: 0.2, usage: null },
+    { isYes: null, yesProb: 0, similarity: 0, usage: null, failed: true, error: '评判超时' },
+  ]);
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+
+  const r = await gm.verify('c', 'u1', 'A', '他是自杀的，凶手是医生');
+  assert.equal(r.type, 'hint');
+  assert.match(r.text, /评判失败/);
+  assert.match(r.text, /评判超时/);
+  assert.equal(gm.historyCount('c'), 0);
+});
+
+test('/ask 和 @我 共用同一份频率限制（一条只记 1 次额度）', async () => {
+  const { gm } = makeGame();
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+
+  for (let i = 0; i < 5; i++) await gm.verify('c', 'u1', 'A', `结论${i}甲。结论${i}乙。`);
+  // 第 6 次仍然放行，第 7 条才被限流
+  assert.equal((await gm.verify('c', 'u1', 'A', '再来一句。再来第二句。')).type, 'verify');
+  const limited = await gm.ask('c', 'u1', 'A', '再问一句');
+  assert.equal(limited.type, 'hint');
+  assert.match(limited.text, /每分钟最多/);
+});
+
+test('/ask 也会被"本局没开始/已通关"拦住', async () => {
+  const { gm } = makeGame([{ isYes: true, yesProb: 1, similarity: 0.9, usage: null }]);
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  assert.equal((await gm.verify('c', 'u1', 'A', '他是自杀的')).type, 'hint');
+
+  gm.start('c', 'u1', 'A');
+  await gm.ask('c', 'u1', 'A', '完整谜底');
+  assert.equal((await gm.verify('c', 'u1', 'A', '他是自杀的')).type, 'hint');
+});
+
+test('/ask 空内容给提示', async () => {
+  const { gm } = makeGame();
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+  assert.match((await gm.verify('c', 'u1', 'A', '   ')).text, /不能为空/);
+});
