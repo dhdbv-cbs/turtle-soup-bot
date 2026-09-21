@@ -10,11 +10,31 @@ const state = {
   questions: [],
   editingId: null,
   problems: [],
+  providers: [],       // 评判渠道清单
+  activeProvider: '',
+  judgeReadiness: null,
+  drawer: null,        // 当前展开的评判渠道
 };
 let refreshTimer = null;
 
 const root = document.getElementById('root');
 const toastEl = document.getElementById('toast');
+
+const TABS = ['overview', 'judge', 'discord', 'napcat', 'official', 'questions', 'admin'];
+
+/* ---------------- 锚点深链：#judge / #judge/typesafe ---------------- */
+
+function readHash() {
+  const raw = String(location.hash || '').replace(/^#/, '');
+  const [tab, sub] = raw.split('/');
+  if (TABS.includes(tab)) state.tab = tab;
+  if (state.tab === 'judge' && sub) state.drawer = sub;
+}
+
+function syncHash() {
+  const hash = state.tab === 'judge' && state.drawer ? `#judge/${state.drawer}` : `#${state.tab}`;
+  if (location.hash !== hash) location.hash = hash;
+}
 
 /* ---------------- 基础 ---------------- */
 
@@ -149,23 +169,13 @@ function renderLogin() {
 /* ---------------- 表单定义 ---------------- */
 
 const FORMS = {
-  judge: {
-    title: '评判模型（Jev）',
-    sub: '玩家提问时用它判断「是/不是」，并给出与谜底的相似度。',
-    fields: [
-      { path: 'judge.apiKey', label: 'AI Gateway API Key', type: 'secret', hint: 'Vercel AI Gateway 的 vck_ 密钥；留空表示不修改' },
-      { path: 'judge.model', label: '模型 ID', type: 'text', placeholder: 'typesafe-ai/jev' },
-      { path: 'judge.winThreshold', label: '通关相似度阈值', type: 'number', step: '0.05', min: '0', max: '1', hint: '0~1，达到该相似度即通关并公布谜底' },
-      { path: 'judge.yesThreshold', label: '判「是」的概率阈值', type: 'number', step: '0.05', min: '0', max: '1' },
-    ],
-  },
   discord: {
     title: 'Discord',
-    sub: '需要开启 Message Content Intent，并把机器人邀请进服务器。',
+    sub: '需要开启 Message Content Intent，并把机器人邀请进服务器。命令以 Discord 原生斜杠命令注册。',
     fields: [
       { path: 'discord.enabled', label: '启用 Discord 通道', type: 'bool' },
       { path: 'discord.token', label: 'Bot Token', type: 'secret' },
-      { path: 'discord.prefix', label: '命令前缀', type: 'text', placeholder: '!' },
+      { path: 'discord.helpText', label: '/help 文案', type: 'long', hint: '留空使用内置文案（会说明 Discord 的原生斜杠命令与 @我 提问）；填写后完全替换' },
     ],
   },
   napcat: {
@@ -175,7 +185,7 @@ const FORMS = {
       { path: 'qq.napcat.enabled', label: '启用该通道', type: 'bool' },
       { path: 'qq.napcat.wsUrl', label: 'WebSocket 地址', type: 'text', placeholder: 'ws://127.0.0.1:3001' },
       { path: 'qq.napcat.accessToken', label: 'Access Token', type: 'secret', hint: 'NapCat 未设置令牌时留空' },
-      { path: 'qq.napcat.prefix', label: '命令前缀', type: 'text', placeholder: '#' },
+      { path: 'qq.napcat.helpText', label: '/help 文案', type: 'long', hint: '留空使用内置文案（会说明群里要先 @机器人）；填写后完全替换' },
     ],
   },
   official: {
@@ -186,8 +196,8 @@ const FORMS = {
       { path: 'qq.official.appId', label: 'AppID', type: 'text' },
       { path: 'qq.official.appSecret', label: 'AppSecret', type: 'secret' },
       { path: 'qq.official.sandbox', label: '使用沙箱环境', type: 'bool', hint: '关闭后使用正式环境（api.sgroup.qq.com）' },
-      { path: 'qq.official.prefix', label: '命令前缀', type: 'text', placeholder: '#' },
       { path: 'qq.official.guildMessages', label: '同时接收频道（子频道）@消息', type: 'bool', hint: '需要机器人具备公域消息权限，未开通时可能连不上网关' },
+      { path: 'qq.official.helpText', label: '/help 文案', type: 'long', hint: '留空使用内置文案（会说明被动回复条数限制）；填写后完全替换' },
     ],
   },
   admin: {
@@ -199,6 +209,12 @@ const FORMS = {
     ],
   },
 };
+
+// 评判参数（渠道本身在抽屉里配置）
+const JUDGE_PARAMS = [
+  { path: 'judge.winThreshold', label: '通关相似度阈值', type: 'number', step: '0.05', min: '0', max: '1', hint: '0~1，玩家发言与谜底的相似度达到该值即通关' },
+  { path: 'judge.yesThreshold', label: '判「是」的概率阈值', type: 'number', step: '0.05', min: '0', max: '1', hint: '布尔题概率超过该值才回答「是」' },
+];
 
 function getValue(config, path) {
   return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), config);
@@ -227,6 +243,13 @@ function fieldHtml(f, config) {
       ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
   }
 
+  if (f.type === 'long') {
+    return `<div class="field">
+      <label>${esc(f.label)}</label>
+      <textarea data-field="${f.path}" id="${id}" placeholder="${esc(f.placeholder || '')}">${esc(value ?? '')}</textarea>
+      ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
+  }
+
   const type = f.type === 'number' ? 'number' : 'text';
   const attrs = [
     f.step ? `step="${f.step}"` : '',
@@ -252,11 +275,9 @@ function formCard(name) {
   </div>`;
 }
 
-function collectForm(name) {
-  const spec = FORMS[name];
-  const card = root.querySelector(`[data-form="${name}"]`);
+function collectFields(card, fields) {
   const patch = {};
-  for (const f of spec.fields) {
+  for (const f of fields) {
     const el = card.querySelector(`[data-field="${f.path}"]`);
     if (!el) continue;
     if (f.type === 'bool') { setPath(patch, f.path, el.checked); continue; }
@@ -276,6 +297,169 @@ function collectForm(name) {
   return patch;
 }
 
+function collectForm(name) {
+  const spec = FORMS[name];
+  const card = root.querySelector(`[data-form="${name}"]`);
+  return collectFields(card, spec.fields);
+}
+
+/* ---------------- 评判渠道：抽屉式 ---------------- */
+
+function providerFields(meta) {
+  const fields = [
+    {
+      path: `judge.providers.${meta.id}.apiKey`,
+      label: 'API Key',
+      type: 'secret',
+      hint: meta.apiKeyEnv
+        ? `也可以用环境变量 ${meta.apiKeyEnv}（留空即用环境变量）`
+        : meta.apiKeyOptional
+          ? '自建/本地网关可以不填'
+          : '',
+    },
+  ];
+  if (meta.supportsBaseURL) {
+    fields.push({
+      path: `judge.providers.${meta.id}.baseURL`,
+      label: 'Base URL',
+      type: 'text',
+      placeholder: meta.requiresBaseURL ? '必填，例如 https://gateway.example.com' : '留空使用官方地址',
+    });
+  }
+  fields.push({
+    path: `judge.providers.${meta.id}.model`,
+    label: '模型 ID',
+    type: 'text',
+    placeholder: meta.modelExample || 'model-id',
+  });
+  return fields;
+}
+
+function providerEntry(id) {
+  return getValue(state.config || {}, `judge.providers.${id}`) || {};
+}
+
+function providerDot(meta, entry) {
+  if (!meta.installed) return 'disabled';
+  if (entry.apiKey || entry.apiKeySet) return 'connected';
+  return 'unconfigured';
+}
+
+function drawerHtml(meta) {
+  const entry = providerEntry(meta.id);
+  const active = state.activeProvider === meta.id;
+  const open = state.drawer === meta.id;
+  const configured = !!(entry.apiKeySet || entry.apiKey) || !!entry.model;
+  const tags = [
+    active ? '<span class="tag on">使用中</span>' : '',
+    !meta.installed ? '<span class="tag warn">依赖未安装</span>' : '',
+    configured && !active ? '<span class="tag">已配置</span>' : '',
+  ].join('');
+
+  const body = open
+    ? `<div class="drawer-body">
+        ${!meta.installed
+          ? `<div class="problems">这个渠道需要先安装依赖：<code>npm i ${esc(meta.pkg)}</code></div>`
+          : ''}
+        <div class="sub">${esc(meta.note)}${meta.home ? ` · <a href="${esc(meta.home)}" target="_blank" rel="noreferrer">官方文档</a>` : ''}</div>
+        ${providerFields(meta).map((f) => fieldHtml(f, state.config || {})).join('')}
+        <div class="actions">
+          <button class="primary" data-use-provider="${meta.id}" ${meta.installed ? '' : 'disabled'}>
+            ${active ? '保存' : '保存并切换到该渠道'}
+          </button>
+          ${active ? '' : `<button data-save-provider="${meta.id}" ${meta.installed ? '' : 'disabled'}>仅保存</button>`}
+        </div>
+        <div class="hint">切换后立即生效，正在进行的游戏不受影响。</div>
+      </div>`
+    : '';
+
+  return `<div class="drawer ${open ? 'open' : ''}" data-form="provider:${meta.id}">
+    <button class="drawer-head" data-toggle="${meta.id}">
+      <span class="chev">${open ? '▾' : '▸'}</span>
+      <span class="dot ${providerDot(meta, entry)}"></span>
+      <span class="drawer-title">${esc(meta.label)}${tags}</span>
+      <span class="drawer-meta">${esc(entry.model || meta.defaultModel || '未设置模型')}</span>
+    </button>
+    ${body}
+  </div>`;
+}
+
+function judgeHtml() {
+  const r = state.judgeReadiness;
+  const activeMeta = state.providers.find((p) => p.id === state.activeProvider);
+  const statusLine = r?.ready
+    ? `<span class="dot connected"></span>可用：${esc(r.meta?.label || state.activeProvider)}`
+    : `<span class="dot unconfigured"></span>还不可用：${esc(r?.reason || '未配置')}`;
+
+  return `${problemsHtml()}
+    <div class="card">
+      <h2>当前评判渠道</h2>
+      <div class="sub">判断「是/不是」并计算与谜底的相似度。所有渠道走 AI SDK 同一套评判接口，切换渠道不需要重装任何东西。</div>
+      <div class="chan">
+        ${statusLine}
+        <div class="detail">${esc(activeMeta?.note || '')}</div>
+      </div>
+      <div class="hint">下面点开任意一个渠道就能填它的密钥和模型；同一时间只用其中一个。</div>
+    </div>
+
+    <div class="card">
+      <h2>可选的评判渠道</h2>
+      <div class="sub">提供 Jev 的平台：Vercel AI Gateway、TypeSafe 官方直连（Netlify 的网关只能在 Netlify 里用）。另外 OpenAI / Anthropic / Google 也能完成同样的评判，只是模型不是 Jev。</div>
+      ${state.providers.length ? state.providers.map(drawerHtml).join('') : '<div class="muted">加载中…</div>'}
+    </div>
+
+    <div class="card" data-form="judge-params">
+      <h2>评判参数</h2>
+      <div class="sub">对所有渠道都生效。</div>
+      ${JUDGE_PARAMS.map((f) => fieldHtml(f, state.config || {})).join('')}
+      <div class="actions"><button class="primary" data-save-params="1">保存参数</button></div>
+    </div>`;
+}
+
+async function saveProvider(id, { activate = false } = {}) {
+  const meta = state.providers.find((p) => p.id === id);
+  if (!meta) return;
+  const card = root.querySelector(`[data-form="provider:${id}"]`);
+  if (!card) return;
+
+  const patch = collectFields(card, providerFields(meta));
+  const entry = patch.judge?.providers?.[id] || {};
+  const current = providerEntry(id);
+  const hasKey = entry.apiKey !== undefined && entry.apiKey !== null ? true : !!current.apiKeySet;
+
+  if (!entry.model) return toast('请先填写模型 ID', 'bad');
+  if (meta.requiresBaseURL && !entry.baseURL) return toast('这个渠道必须填写 Base URL', 'bad');
+  if (activate) patch.judge.provider = id;
+
+  try {
+    const r = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) });
+    state.config = r.config;
+    state.problems = r.problems || [];
+    state.activeProvider = r.config.judge.provider;
+    state.drawer = id;
+    await loadProviders();
+    renderApp();
+    toast(!hasKey && !current.apiKeySet ? '已保存，但还没有填 API Key' : r.note || '已保存');
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
+}
+
+async function saveJudgeParams() {
+  const card = root.querySelector('[data-form="judge-params"]');
+  const patch = collectFields(card, JUDGE_PARAMS);
+  patch.judge = { ...patch.judge, provider: state.activeProvider };
+  try {
+    const r = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) });
+    state.config = r.config;
+    state.problems = r.problems || [];
+    renderApp();
+    toast('已保存');
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
+}
+
 /* ---------------- 主界面 ---------------- */
 
 function tabBtn(id, label) {
@@ -291,7 +475,7 @@ function header() {
   </div>
   <nav>
     ${tabBtn('overview', '概览')}
-    ${tabBtn('judge', '评判模型')}
+    ${tabBtn('judge', '评判渠道')}
     ${tabBtn('discord', 'Discord')}
     ${tabBtn('napcat', 'QQ · NapCat')}
     ${tabBtn('official', 'QQ · 官方机器人')}
@@ -393,6 +577,7 @@ function renderApp() {
   state.screen = 'app';
   let body = '';
   if (state.tab === 'overview') body = overviewHtml();
+  else if (state.tab === 'judge') body = judgeHtml();
   else if (state.tab === 'questions') body = questionsHtml();
   else body = problemsHtml() + formCard(state.tab);
 
@@ -413,9 +598,31 @@ function bindApp() {
     el.addEventListener('click', () => {
       state.tab = el.dataset.tab;
       state.editingId = null;
+      state.drawer = null;
+      syncHash();
       renderApp();
       loadTabData();
     });
+  });
+
+  // 抽屉：同一时间只展开一个
+  root.querySelectorAll('[data-toggle]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = el.dataset.toggle;
+      state.drawer = state.drawer === id ? null : id;
+      syncHash();
+      renderApp();
+    });
+  });
+
+  root.querySelectorAll('[data-use-provider]').forEach((el) => {
+    el.addEventListener('click', () => saveProvider(el.dataset.useProvider, { activate: true }));
+  });
+  root.querySelectorAll('[data-save-provider]').forEach((el) => {
+    el.addEventListener('click', () => saveProvider(el.dataset.saveProvider, { activate: false }));
+  });
+  root.querySelectorAll('[data-save-params]').forEach((el) => {
+    el.addEventListener('click', saveJudgeParams);
   });
 
   root.querySelectorAll('[data-clear]').forEach((el) => {
@@ -555,10 +762,18 @@ async function loadConfig() {
   state.problems = r.problems || [];
 }
 
+async function loadProviders() {
+  const r = await api('/api/judge/providers');
+  state.providers = r.providers || [];
+  state.activeProvider = r.active;
+  state.judgeReadiness = r.readiness || null;
+}
+
 async function loadTabData() {
   try {
     if (state.tab === 'overview') await loadOverview();
     else if (state.tab === 'questions') await loadQuestions();
+    else if (state.tab === 'judge') await Promise.all([loadConfig(), loadProviders()]);
     else await loadConfig();
     if (state.screen === 'app') renderApp();
   } catch (e) {
@@ -568,14 +783,27 @@ async function loadTabData() {
 }
 
 async function enterApp() {
-  state.tab = 'overview';
+  readHash();
   await loadOverview();
   await loadConfig();
+  if (state.tab === 'judge') await loadProviders();
   renderApp();
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(() => {
     if (state.screen === 'app' && state.tab === 'overview') loadOverview();
   }, 5000);
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('hashchange', onHashChange);
+  }
+}
+
+function onHashChange() {
+  if (state.screen !== 'app') return;
+  const before = `${state.tab}/${state.drawer}`;
+  readHash();
+  if (`${state.tab}/${state.drawer}` === before) return;
+  renderApp();
+  loadTabData();
 }
 
 async function boot() {

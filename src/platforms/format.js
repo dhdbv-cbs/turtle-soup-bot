@@ -14,7 +14,7 @@ export function formatAskResult(result, { mention = defaultMention } = {}) {
         `🎉 通关！由 ${mention(result.userId, result.userName)} 揭示谜底（相似度 ${percent(result.similarity)}）\n\n` +
         `参与玩家（${result.participantCount} 人）：${names.join('、')}\n\n` +
         `【完整谜底】\n${result.question?.answer ?? ''}\n\n` +
-        `用「汤 下一题」开始新的一局！`;
+        `用 /next 开始新的一局！`;
       return { text, users: result.userId ? [result.userId] : [] };
     }
 

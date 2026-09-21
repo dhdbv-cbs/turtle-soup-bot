@@ -10,6 +10,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PROVIDER_IDS, defaultProviderEntries, providerMeta } from './judge/providers.js';
+import { isPlaceholder } from './utils/placeholder.js';
 import { error, log, warn } from './utils/logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,31 +32,33 @@ export function defaultConfig() {
       passwordSalt: null,
     },
     judge: {
-      apiKey: '',
-      model: 'typesafe-ai/jev',
+      // 当前使用的评判渠道 + 每个渠道各自一份凭据，切换时不用重新填
+      provider: 'gateway',
+      providers: defaultProviderEntries(),
       winThreshold: 0.8,
       yesThreshold: 0.5,
     },
     discord: {
       enabled: false,
       token: '',
-      prefix: '!',
+      // 留空则用内置的渠道说明；填了就替换掉 /help 的正文
+      helpText: '',
     },
     qq: {
       napcat: {
         enabled: false,
         wsUrl: 'ws://127.0.0.1:3001',
         accessToken: '',
-        prefix: '#',
+        helpText: '',
       },
       official: {
         enabled: false,
         appId: '',
         appSecret: '',
         sandbox: true,
-        prefix: '#',
         // 是否额外订阅频道（子频道）@消息，需要机器人有公域消息权限
         guildMessages: false,
+        helpText: '',
       },
     },
   };
@@ -77,11 +81,7 @@ function isPlainObject(v) {
 }
 
 // .env 里的示例占位符（your-xxx）视为"未配置"
-export function isPlaceholder(value) {
-  if (!value) return true;
-  const v = String(value).trim().toLowerCase();
-  return v.startsWith('your-') || v.startsWith('your_');
-}
+export { isPlaceholder };
 
 // ============ 校验与归一化 ============
 
@@ -146,10 +146,38 @@ export function coerceConfig(raw, problems = []) {
     out.admin.passwordSalt = null;
   }
 
-  // judge
+  // judge：当前渠道 + 每个渠道各一份配置
   const j = isPlainObject(r.judge) ? r.judge : {};
-  out.judge.apiKey = c.str(j.apiKey, '', 'judge.apiKey') ?? '';
-  out.judge.model = c.str(j.model, def.judge.model, 'judge.model');
+  // 兼容旧配置（judge.apiKey / judge.model）与 .env 种子：迁移到 gateway 渠道
+  const legacyKey = typeof j.apiKey === 'string' ? j.apiKey.trim() : '';
+  const legacyModel = typeof j.model === 'string' ? j.model.trim() : '';
+  const rp = isPlainObject(j.providers) ? j.providers : {};
+  for (const id of PROVIDER_IDS) {
+    const src = isPlainObject(rp[id]) ? rp[id] : {};
+    const isGateway = id === 'gateway';
+    const fallbackKey = isGateway ? legacyKey : '';
+    const fallbackModel = isGateway && legacyModel ? legacyModel : def.judge.providers[id].model;
+    const entry = out.judge.providers[id];
+    entry.apiKey = c.str(src.apiKey, fallbackKey, `judge.providers.${id}.apiKey`) ?? '';
+    entry.baseURL = c.str(src.baseURL, '', `judge.providers.${id}.baseURL`) ?? '';
+    entry.model = c.str(src.model, fallbackModel, `judge.providers.${id}.model`) ?? '';
+    if (entry.baseURL && !/^https?:\/\//i.test(entry.baseURL)) {
+      problems.push(`judge.providers.${id}.baseURL 必须以 http:// 或 https:// 开头`);
+      entry.baseURL = '';
+    }
+  }
+  const wantedProvider = c.str(j.provider, def.judge.provider, 'judge.provider');
+  if (!PROVIDER_IDS.includes(wantedProvider)) {
+    problems.push(`judge.provider 只能是 ${PROVIDER_IDS.join(' / ')}，当前值：${wantedProvider}`);
+    out.judge.provider = def.judge.provider;
+  } else {
+    out.judge.provider = wantedProvider;
+  }
+  // 只有正在使用的渠道才强制要求 Base URL，没在用的渠道留空不算错
+  const activeMeta = providerMeta(out.judge.provider);
+  if (activeMeta?.requiresBaseURL && !out.judge.providers[out.judge.provider].baseURL) {
+    problems.push(`judge.providers.${out.judge.provider} 必须填写 Base URL`);
+  }
   out.judge.winThreshold = c.num(j.winThreshold, def.judge.winThreshold, 'judge.winThreshold', 0, 1);
   out.judge.yesThreshold = c.num(j.yesThreshold, def.judge.yesThreshold, 'judge.yesThreshold', 0, 1);
 
@@ -157,7 +185,7 @@ export function coerceConfig(raw, problems = []) {
   const d = isPlainObject(r.discord) ? r.discord : {};
   out.discord.enabled = c.bool(d.enabled, def.discord.enabled, 'discord.enabled');
   out.discord.token = c.str(d.token, '', 'discord.token') ?? '';
-  out.discord.prefix = c.str(d.prefix, def.discord.prefix, 'discord.prefix');
+  out.discord.helpText = c.str(d.helpText, '', 'discord.helpText') ?? '';
 
   // qq.napcat
   const qq = isPlainObject(r.qq) ? r.qq : {};
@@ -165,7 +193,7 @@ export function coerceConfig(raw, problems = []) {
   out.qq.napcat.enabled = c.bool(n.enabled, def.qq.napcat.enabled, 'qq.napcat.enabled');
   out.qq.napcat.wsUrl = c.str(n.wsUrl, def.qq.napcat.wsUrl, 'qq.napcat.wsUrl');
   out.qq.napcat.accessToken = c.str(n.accessToken, '', 'qq.napcat.accessToken') ?? '';
-  out.qq.napcat.prefix = c.str(n.prefix, def.qq.napcat.prefix, 'qq.napcat.prefix');
+  out.qq.napcat.helpText = c.str(n.helpText, '', 'qq.napcat.helpText') ?? '';
   if (!/^wss?:\/\//i.test(out.qq.napcat.wsUrl)) {
     problems.push('qq.napcat.wsUrl 必须以 ws:// 或 wss:// 开头');
     out.qq.napcat.wsUrl = def.qq.napcat.wsUrl;
@@ -177,12 +205,12 @@ export function coerceConfig(raw, problems = []) {
   out.qq.official.appId = c.str(o.appId, '', 'qq.official.appId') ?? '';
   out.qq.official.appSecret = c.str(o.appSecret, '', 'qq.official.appSecret') ?? '';
   out.qq.official.sandbox = c.bool(o.sandbox, def.qq.official.sandbox, 'qq.official.sandbox');
-  out.qq.official.prefix = c.str(o.prefix, def.qq.official.prefix, 'qq.official.prefix');
   out.qq.official.guildMessages = c.bool(
     o.guildMessages,
     def.qq.official.guildMessages,
     'qq.official.guildMessages',
   );
+  out.qq.official.helpText = c.str(o.helpText, '', 'qq.official.helpText') ?? '';
 
   return out;
 }
@@ -216,22 +244,26 @@ function seedFromEnv() {
   const raw = {
     admin: { host: str('ADMIN_HOST'), port: num('ADMIN_PORT') },
     judge: {
+      // 旧的环境变量名保持可用：AI_GATEWAY_API_KEY / JEV_MODEL → gateway 渠道
       apiKey: secret('AI_GATEWAY_API_KEY'),
       model: str('JEV_MODEL'),
       winThreshold: num('WIN_THRESHOLD'),
       yesThreshold: num('YES_THRESHOLD'),
+      providers: {
+        gateway: { apiKey: secret('AI_GATEWAY_API_KEY'), model: str('JEV_MODEL') },
+        typesafe: { apiKey: secret('TYPESAFE_API_KEY') },
+      },
+      provider: str('JUDGE_PROVIDER'),
     },
     discord: {
       enabled: bool('DISCORD_ENABLED'),
       token: secret('DISCORD_TOKEN'),
-      prefix: str('DISCORD_PREFIX'),
     },
     qq: {
       napcat: {
         enabled: bool('QQ_ENABLED'),
         wsUrl: str('ONEBOT_WS_URL'),
         accessToken: secret('ONEBOT_ACCESS_TOKEN'),
-        prefix: str('QQ_PREFIX'),
       },
       official: {
         enabled: bool('QQ_OFFICIAL_ENABLED'),
@@ -318,15 +350,28 @@ export function publicConfig() {
       hasPassword: hasPassword(),
     },
     judge: {
-      model: c.judge.model,
+      provider: c.judge.provider,
       winThreshold: c.judge.winThreshold,
       yesThreshold: c.judge.yesThreshold,
-      apiKey: c.judge.apiKey ? SECRET_MASK : '',
-      apiKeySet: !!c.judge.apiKey,
+      // 每个渠道一份掩码，明文只在服务端
+      providers: Object.fromEntries(
+        PROVIDER_IDS.map((id) => {
+          const entry = c.judge.providers[id] ?? {};
+          return [
+            id,
+            {
+              apiKey: entry.apiKey ? SECRET_MASK : '',
+              apiKeySet: !!entry.apiKey,
+              baseURL: entry.baseURL || '',
+              model: entry.model || '',
+            },
+          ];
+        }),
+      ),
     },
     discord: {
       enabled: c.discord.enabled,
-      prefix: c.discord.prefix,
+      helpText: c.discord.helpText,
       token: c.discord.token ? SECRET_MASK : '',
       tokenSet: !!c.discord.token,
     },
@@ -334,7 +379,7 @@ export function publicConfig() {
       napcat: {
         enabled: c.qq.napcat.enabled,
         wsUrl: c.qq.napcat.wsUrl,
-        prefix: c.qq.napcat.prefix,
+        helpText: c.qq.napcat.helpText,
         accessToken: c.qq.napcat.accessToken ? SECRET_MASK : '',
         accessTokenSet: !!c.qq.napcat.accessToken,
       },
@@ -342,7 +387,7 @@ export function publicConfig() {
         enabled: c.qq.official.enabled,
         appId: c.qq.official.appId,
         sandbox: c.qq.official.sandbox,
-        prefix: c.qq.official.prefix,
+        helpText: c.qq.official.helpText,
         guildMessages: c.qq.official.guildMessages,
         appSecret: c.qq.official.appSecret ? SECRET_MASK : '',
         appSecretSet: !!c.qq.official.appSecret,
@@ -368,10 +413,16 @@ export async function updateConfig(patch) {
     target[key] = String(value);
   };
 
-  applySecret(next.judge, 'apiKey', p.judge?.apiKey);
   applySecret(next.discord, 'token', p.discord?.token);
   applySecret(next.qq.napcat, 'accessToken', p.qq?.napcat?.accessToken);
   applySecret(next.qq.official, 'appSecret', p.qq?.official?.appSecret);
+
+  // judge 的每个渠道各有一份 apiKey，语义同样是"留空保持、null 清空"
+  for (const id of PROVIDER_IDS) {
+    const incoming = p.judge?.providers?.[id];
+    if (!isPlainObject(incoming) || !isPlainObject(next.judge.providers[id])) continue;
+    applySecret(next.judge.providers[id], 'apiKey', incoming.apiKey);
+  }
 
   // 普通字段：直接覆盖
   const set = (target, key, value) => {
@@ -380,22 +431,28 @@ export async function updateConfig(patch) {
   set(next.admin, 'host', p.admin?.host);
   set(next.admin, 'port', p.admin?.port);
 
-  set(next.judge, 'model', p.judge?.model);
+  set(next.judge, 'provider', p.judge?.provider);
   set(next.judge, 'winThreshold', p.judge?.winThreshold);
   set(next.judge, 'yesThreshold', p.judge?.yesThreshold);
+  for (const id of PROVIDER_IDS) {
+    const incoming = p.judge?.providers?.[id];
+    if (!isPlainObject(incoming) || !isPlainObject(next.judge.providers[id])) continue;
+    set(next.judge.providers[id], 'model', incoming.model);
+    set(next.judge.providers[id], 'baseURL', incoming.baseURL);
+  }
 
   set(next.discord, 'enabled', p.discord?.enabled);
-  set(next.discord, 'prefix', p.discord?.prefix);
+  set(next.discord, 'helpText', p.discord?.helpText);
 
   set(next.qq.napcat, 'enabled', p.qq?.napcat?.enabled);
   set(next.qq.napcat, 'wsUrl', p.qq?.napcat?.wsUrl);
-  set(next.qq.napcat, 'prefix', p.qq?.napcat?.prefix);
+  set(next.qq.napcat, 'helpText', p.qq?.napcat?.helpText);
 
   set(next.qq.official, 'enabled', p.qq?.official?.enabled);
   set(next.qq.official, 'appId', p.qq?.official?.appId);
   set(next.qq.official, 'sandbox', p.qq?.official?.sandbox);
-  set(next.qq.official, 'prefix', p.qq?.official?.prefix);
   set(next.qq.official, 'guildMessages', p.qq?.official?.guildMessages);
+  set(next.qq.official, 'helpText', p.qq?.official?.helpText);
 
   const problems = [];
   const coerced = coerceConfig(next, problems);

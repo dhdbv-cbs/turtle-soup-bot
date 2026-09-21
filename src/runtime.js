@@ -94,7 +94,7 @@ export class BotRuntime {
       return {
         wanted: true,
         reason: '',
-        signature: JSON.stringify({ token: c.token, prefix: c.prefix }),
+        signature: JSON.stringify({ token: c.token }),
       };
     }
 
@@ -105,7 +105,7 @@ export class BotRuntime {
       return {
         wanted: true,
         reason: '',
-        signature: JSON.stringify({ wsUrl: c.wsUrl, accessToken: c.accessToken, prefix: c.prefix }),
+        signature: JSON.stringify({ wsUrl: c.wsUrl, accessToken: c.accessToken }),
       };
     }
 
@@ -125,7 +125,6 @@ export class BotRuntime {
           appId: c.appId,
           appSecret: c.appSecret,
           sandbox: c.sandbox,
-          prefix: c.prefix,
           guildMessages: c.guildMessages,
         }),
       };

@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CONFIG_FILE,
+  config,
   configProblems,
   hasPassword,
   passwordMinLength,
@@ -14,6 +15,7 @@ import {
   updateConfig,
   verifyPassword,
 } from '../config.js';
+import { PROVIDERS, installedMap, judgeReadiness } from '../judge/providers.js';
 import { error, log, warn } from '../utils/logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,6 +32,19 @@ function appVersion() {
   } catch {
     return '0.0.0';
   }
+}
+
+// judgeReadiness 里带着渠道的原始配置（含明文密钥），对外只暴露必要字段
+function publicJudgeStatus() {
+  const r = judgeReadiness(config.judge);
+  if (!r.ready) return { ready: false, reason: r.reason };
+  return {
+    ready: true,
+    provider: config.judge.provider,
+    label: r.meta?.label ?? '',
+    note: r.meta?.note ?? '',
+    model: r.entry?.model ?? '',
+  };
 }
 
 export function createAdminApp({ runtime, questionStore }) {
@@ -144,7 +159,36 @@ export function createAdminApp({ runtime, questionStore }) {
       appliedAt: runtime.appliedAt,
       channels: runtime.status(),
       questions: questionStore.count,
+      judge: publicJudgeStatus(),
     });
+  });
+
+  // 评判渠道清单（含依赖是否已安装），后台界面用它渲染抽屉列表
+  app.get('/api/judge/providers', auth, async (req, res) => {
+    try {
+      const installed = await installedMap();
+      res.json({
+        active: config.judge.provider,
+        readiness: publicJudgeStatus(),
+        providers: PROVIDERS.map((p) => ({
+          id: p.id,
+          label: p.label,
+          pkg: p.pkg,
+          defaultModel: p.defaultModel,
+          modelExample: p.modelExample,
+          apiKeyEnv: p.apiKeyEnv || '',
+          note: p.note,
+          home: p.home,
+          requiresBaseURL: !!p.requiresBaseURL,
+          apiKeyOptional: !!p.apiKeyOptional,
+          supportsBaseURL: !!p.supportsBaseURL,
+          installed: !!installed[p.id],
+        })),
+      });
+    } catch (e) {
+      error('读取评判渠道失败：', e.message);
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.post('/api/runtime/apply', auth, (req, res) => {

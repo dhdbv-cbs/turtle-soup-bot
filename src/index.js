@@ -5,6 +5,7 @@ import { JevJudge } from './game/JevJudge.js';
 import { GameManager } from './game/GameManager.js';
 import { CommandHandler } from './CommandHandler.js';
 import { BotRuntime } from './runtime.js';
+import { judgeReadiness } from './judge/providers.js';
 import { createAdminApp } from './web/server.js';
 import { log, error, warn } from './utils/logger.js';
 
@@ -59,9 +60,16 @@ async function main() {
   // 6. 按配置连接各条通道
   await runtime.apply();
 
+  // 7. 评判渠道没配好时提前提醒（游戏能开，但提问会失败）
+  const judgeStatus = judgeReadiness(config.judge);
+  if (!judgeStatus.ready) {
+    warn(`评判渠道还没配好：${judgeStatus.reason}`);
+    warn('  在后台界面「评判渠道」里填上密钥即可，保存后立即生效。');
+  }
+
   log('----------------------------------------');
   log(`后台界面：http://${host}:${port}`);
-  log('Discord 用「!汤 帮助」，QQ 用「#汤 帮助」查看命令。');
+  log('三个渠道统一用 /斜杠命令：/help 查看各自渠道的用法。');
   log('========================================');
 
   // 优雅退出

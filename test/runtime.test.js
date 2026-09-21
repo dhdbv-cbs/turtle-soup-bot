@@ -69,10 +69,25 @@ test('配置变化会重启对应通道', async () => {
   const { runtime, log } = makeRuntime();
 
   await runtime.apply();
-  config.discord.prefix = '!!';
+  config.discord.token = 'token-2'; // 换了 Token 应该重连
   await runtime.apply();
 
   assert.deepEqual(log, ['start:discord', 'stop:discord', 'start:discord']);
+});
+
+test('只改 /help 文案不需要重连通道（调用时才读取）', async () => {
+  resetConfig();
+  config.discord.enabled = true;
+  config.discord.token = 'token-1';
+  const { runtime, log } = makeRuntime();
+
+  await runtime.apply();
+  config.discord.helpText = '本服专用说明';
+  await runtime.apply();
+  config.qq.napcat.helpText = 'NapCat 说明';
+  await runtime.apply();
+
+  assert.deepEqual(log, ['start:discord'], 'help 文案不影响连接，不应重启');
 });
 
 test('启用但缺 Token 时标记为待配置且不启动', async () => {

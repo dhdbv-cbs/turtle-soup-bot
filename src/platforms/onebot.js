@@ -8,8 +8,9 @@ import { formatAskResult } from './format.js';
 import { log, error, warn } from '../utils/logger.js';
 
 export function startOneBot(handler) {
-  const { wsUrl: WS_URL, accessToken: ACCESS_TOKEN, prefix: PREFIX } = config.qq.napcat;
+  const { wsUrl: WS_URL, accessToken: ACCESS_TOKEN } = config.qq.napcat;
 
+  const mention = (id, name) => (id ? `[CQ:at,qq=${id}]` : name || '玩家');
   const status = { state: 'connecting', detail: '正在连接…' };
   let stopped = false;
   let ws = null;
@@ -33,7 +34,7 @@ export function startOneBot(handler) {
           if (info?.user_id) {
             selfId = String(info.user_id);
             status.detail = `已登录 QQ ${selfId}`;
-            log(`QQ 机器人登录号：${selfId}（前缀 ${PREFIX}汤）`);
+            log(`QQ 机器人登录号：${selfId}（斜杠命令，如 /help）`);
           }
         })
         .catch(() => {});
@@ -128,29 +129,34 @@ export function startOneBot(handler) {
     plainText = plainText.trim();
 
     // 群里没 @机器人 也不是命令，忽略
-    if (isGroup && !atBot && !plainText.startsWith(PREFIX)) return;
+    const isCommand = plainText.startsWith('/');
+    if (isGroup && !atBot && !isCommand) return;
 
-    // 1) 前缀命令：#汤 ...
-    if (plainText.startsWith(PREFIX)) {
-      const result = await handler.handle(channelKey, String(userId), userName, plainText);
-      if (result) await sendReply(evt, result.text);
+    // 1) /斜杠命令
+    if (isCommand) {
+      const result = await handler.handle(channelKey, String(userId), userName, plainText, {
+        platform: 'napcat',
+      });
+      if (!result) return;
+      if (result.ask) {
+        const { text } = formatAskResult(result.ask, { mention });
+        await sendReply(evt, text);
+        return;
+      }
+      await sendReply(evt, result.text);
       return;
     }
 
-    // 2) @机器人 提问
-    if (atBot) {
-      const askText = plainText.trim();
-      if (!askText) {
-        await sendReply(evt, '你 @我 了但没说内容，把问题发给我吧。');
-        return;
-      }
-      await sendReply(evt, '🤔 思考中…');
-      const result = await handler.handleAsk(channelKey, String(userId), userName, askText);
-      const { text } = formatAskResult(result, {
-        mention: (id, name) => (id ? `[CQ:at,qq=${id}]` : name || '玩家'),
-      });
-      await sendReply(evt, text);
+    // 2) 提问：群里需要 @机器人，私聊直接发就行
+    const askText = plainText.trim();
+    if (!askText) {
+      await sendReply(evt, '你 @我 了但没说内容。用法：/help 查看命令，或 @我 + 你的问题。');
+      return;
     }
+    await sendReply(evt, '🤔 思考中…');
+    const result = await handler.handleAsk(channelKey, String(userId), userName, askText);
+    const { text } = formatAskResult(result, { mention });
+    await sendReply(evt, text);
   }
 
   async function sendReply(evt, text) {

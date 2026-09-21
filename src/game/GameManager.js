@@ -54,7 +54,7 @@ export class GameManager {
   // 开始当前题目
   start(channelKey, userId = null, userName = null) {
     const s = this.getState(channelKey);
-    if (!s.question) return { ok: false, msg: '还没有题目，先用「汤 下一题」或「汤 列表」选择题目。' };
+    if (!s.question) return { ok: false, msg: '还没有题目，先用 /next 或 /pick <编号> 选择题目。' };
     if (this.isRoundActive(s)) {
       return { ok: false, msg: '本局已经开始了，直接 @我 提问即可。' };
     }
@@ -82,17 +82,26 @@ export class GameManager {
   // 处理玩家提问（多人：任何人都可以问）
   async ask(channelKey, userId, userName, message) {
     const s = this.getState(channelKey);
-    if (!s.question) return { type: 'hint', text: '还没有题目，先用「汤 开始」开一局。' };
-    if (!s.started) return { type: 'hint', text: '本局还没开始，用「汤 开始」启动。' };
-    if (s.winner) return { type: 'hint', text: '本局已经通关啦！用「汤 下一题」换一道。' };
-    if (s.revealed) return { type: 'hint', text: '谜底已公布，用「汤 下一题」开始新的一局。' };
+    if (!s.question) return { type: 'hint', text: '还没有题目，先用 /start 开一局。' };
+    if (!s.started) return { type: 'hint', text: '本局还没开始，用 /start 启动。' };
+    if (s.winner) return { type: 'hint', text: '本局已经通关啦！用 /next 换一道。' };
+    if (s.revealed) return { type: 'hint', text: '谜底已公布，用 /next 开始新的一局。' };
 
     s.participants.add(String(userId));
     const trimmed = String(message ?? '').trim();
     if (!trimmed) return { type: 'hint', text: '提问内容不能为空。' };
 
-    // 调用 Jev 评判
+    // 调用评判模型
     const judge = await this.judge.judge(s.question, trimmed);
+
+    // 评判渠道没配好或调用失败：不记入历史，直接把原因告诉玩家
+    if (judge.failed) {
+      return {
+        type: 'hint',
+        userId: String(userId),
+        text: `⚠️ 评判失败：${judge.error}\n（管理员可到后台界面「评判模型」里检查配置）`,
+      };
+    }
 
     const record = {
       userId: String(userId),

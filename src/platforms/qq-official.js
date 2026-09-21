@@ -31,6 +31,8 @@ export function startQqOfficial(handler) {
   const apiBase = cfg.sandbox ? API_BASE.sandbox : API_BASE.production;
 
   const status = { state: 'connecting', detail: '准备连接' };
+  // 官方接口不支持 @ 语法，只能用昵称或占位名
+  const mention = (_id, name) => name || '玩家';
   let stopped = false;
   let ws = null;
   let accessToken = '';
@@ -305,19 +307,25 @@ export function startQqOfficial(handler) {
     const text = normalizeContent(content);
     if (!text) return;
 
-    // 1) 前缀命令
-    if (text.startsWith(cfg.prefix)) {
-      const result = await handler.handle(channelKey, userId, userName, text);
-      if (result) await sendReply(target, result.text, msgId);
+    // 1) /斜杠命令
+    if (text.startsWith('/')) {
+      const result = await handler.handle(channelKey, userId, userName, text, {
+        platform: 'official',
+      });
+      if (!result) return;
+      if (result.ask) {
+        const { text: reply } = formatAskResult(result.ask, { mention });
+        await sendReply(target, reply, msgId);
+        return;
+      }
+      await sendReply(target, result.text, msgId);
       return;
     }
 
     // 2) 提问（群里只有 @机器人 才会收到事件，单聊则直接就是提问）
     await sendReply(target, '🤔 思考中…', msgId);
     const result = await handler.handleAsk(channelKey, userId, userName, text);
-    const { text: reply } = formatAskResult(result, {
-      mention: (_id, name) => name || '玩家',
-    });
+    const { text: reply } = formatAskResult(result, { mention });
     await sendReply(target, reply, msgId);
   }
 

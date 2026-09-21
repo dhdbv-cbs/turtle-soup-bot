@@ -1,7 +1,14 @@
-// Jev 评判层：判断玩家提问「是/不是」，并给出玩家发言与谜底的相似度
+// 评判层：判断玩家提问「是/不是」，并给出玩家发言与谜底的相似度
+//
+// 评判渠道在后台界面里切换（Vercel AI Gateway / TypeSafe 直连 / OpenAI / …），
+// 所有渠道都走 AI SDK 同一套 evaluation model 接口，这里只负责取模型 + 组装问题。
 import { experimental_evaluate } from 'ai';
-import { config, isPlaceholder } from '../config.js';
+import { config } from '../config.js';
+import { createEvaluationModel, judgeReadiness, judgeSignature } from '../judge/providers.js';
 import { error } from '../utils/logger.js';
+
+// 单次评判的超时时间，避免请求卡住整局游戏
+const JUDGE_TIMEOUT_MS = 30000;
 
 // 相似度用 score 题型：等级数决定分数区间 [0, levels - 1]，再归一化到 0~1。
 // 这样得到的是真正的"接近程度"，而不是布尔题的概率。
@@ -22,7 +29,7 @@ export function scoreToSimilarity(score, levels = SIMILARITY_LEVELS.length) {
   return clamped / (levels - 1);
 }
 
-// 构造给 Jev 的 state（题目 + 谜底 + 玩家发言）
+// 构造给评判模型的 state（题目 + 谜底 + 玩家发言）
 function buildState(question, userMessage) {
   return (
     `【海龟汤题目（汤面）】\n${question.puzzle}\n\n` +
@@ -53,19 +60,47 @@ const QUESTIONS = {
 };
 
 export class JevJudge {
-  // 返回 { isYes, yesProb, similarity, usage }
-  // 调用失败时 isYes = null（表示无法判断），similarity = 0
+  constructor() {
+    this.model = null;
+    this.modelSignature = '';
+  }
+
+  // 取当前渠道的模型实例；配置变了就重建
+  async resolveModel() {
+    const signature = judgeSignature(config.judge);
+    if (this.model && this.modelSignature === signature) return this.model;
+
+    const readiness = judgeReadiness(config.judge);
+    if (!readiness.ready) throw new Error(readiness.reason);
+
+    const model = await createEvaluationModel(config.judge.provider, readiness.entry);
+    this.model = model;
+    this.modelSignature = signature;
+    return model;
+  }
+
+  // 当前渠道能否直接工作（后台界面 / 状态展示用）
+  readiness() {
+    return judgeReadiness(config.judge);
+  }
+
+  // 返回 { isYes, yesProb, similarity, usage, failed?, error? }
+  // failed = true 表示这次评判没做成（渠道没配好或调用失败），isYes = null
   async judge(question, userMessage) {
-    if (isPlaceholder(config.judge.apiKey)) {
-      error('Jev 未配置有效 AI_GATEWAY_API_KEY，无法评判');
-      return { isYes: null, yesProb: 0, similarity: 0, usage: null };
+    let model;
+    try {
+      model = await this.resolveModel();
+    } catch (e) {
+      error('评判渠道不可用：', e?.message || String(e));
+      return failure(e?.message || String(e));
     }
 
     try {
       const result = await experimental_evaluate({
-        model: config.judge.model,
+        model,
         state: buildState(question, userMessage),
         questions: QUESTIONS,
+        abortSignal: AbortSignal.timeout(JUDGE_TIMEOUT_MS),
       });
 
       const yesAnswer = result?.answers?.isYes;
@@ -79,10 +114,18 @@ export class JevJudge {
         yesProb,
         similarity,
         usage: result?.usage || null,
+        failed: false,
       };
     } catch (e) {
-      error('Jev 评判调用失败：', e?.message || String(e));
-      return { isYes: null, yesProb: 0, similarity: 0, usage: null };
+      const msg = e?.name === 'TimeoutError' || e?.name === 'AbortError'
+        ? `评判超时（超过 ${JUDGE_TIMEOUT_MS / 1000} 秒）`
+        : `评判调用失败：${e?.message || String(e)}`;
+      error('评判调用失败：', e?.message || String(e));
+      return failure(msg);
     }
   }
+}
+
+function failure(message) {
+  return { isYes: null, yesProb: 0, similarity: 0, usage: null, failed: true, error: message };
 }
