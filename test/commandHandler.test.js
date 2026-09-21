@@ -192,6 +192,37 @@ test('@我 提问仍然是「是 / 不是」，没有被 /ask 改掉', async () 
   assert.equal(text, '[CQ:at,qq=u1]：❌ 不是。');
 });
 
+test('逐句核对：每句都对但没通关时，多一句"还没说中核心谜底"', () => {
+  const mention = (id) => `[CQ:at,qq=${id}]`;
+  const allYes = {
+    type: 'verify',
+    asker: '小明',
+    askerId: 'u1',
+    items: [
+      { text: '他是自杀的', isYes: true },
+      { text: '他留了遗书', isYes: true },
+    ],
+  };
+
+  const hit = formatAskResult(allYes, { mention });
+  assert.equal(
+    hit.text,
+    '[CQ:at,qq=u1]：\n🧾 逐句核对（2 句）\n✅ 他是自杀的\n✅ 他留了遗书' +
+      '\n\n💡 每句都对，但还没说中核心谜底，再往真相推一步。',
+  );
+  assert.deepEqual(hit.users, ['u1']);
+  // 依然不泄露任何分数
+  assert.doesNotMatch(hit.text, /%|相似度|\d\.\d/);
+
+  // 有 ❌ 就不加这句（还没到"方向全对"的程度）
+  const mixed = { ...allYes, items: [{ text: '他是自杀的', isYes: true }, { text: '凶手是医生', isYes: false }] };
+  assert.doesNotMatch(formatAskResult(mixed, { mention }).text, /核心谜底/);
+
+  // 只有一句、判 ❌ 时也不加
+  const no = { ...allYes, items: [{ text: '他是被谋杀的', isYes: false }] };
+  assert.doesNotMatch(formatAskResult(no, { mention }).text, /核心谜底/);
+});
+
 test('换题权限：进行中只有本局发起人能换题', async () => {
   const { handler } = await setup();
   await handler.handle('c', 'u1', 'A', '/next');

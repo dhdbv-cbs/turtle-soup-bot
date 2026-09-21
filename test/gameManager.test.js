@@ -226,6 +226,19 @@ test('/ask 拆满 6 句也只发起一次逐句调用', async () => {
   assert.equal(judge.sentenceCalls[0].items.length, 6);
 });
 
+test('/ask 每句都对但没到通关线：仍然是核对清单，不判通关', async () => {
+  const { gm } = makeGame([
+    { isYes: true, yesProb: 0.9, similarity: 0.6, usage: null }, // 整段：离通关阈值还差一点
+  ]);
+  gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });
+  gm.start('c', 'u1', 'A');
+
+  const r = await gm.verify('c', 'u1', 'A', '他是自杀的，他留了遗书');
+  assert.equal(r.type, 'verify', '没到阈值就不能通关');
+  assert.ok(r.items.length > 1 && r.items.every((it) => it.isYes), '桩默认每句都判 ✅');
+  assert.equal(gm.status('c').winner, null);
+});
+
 test('/ask 单句只评判一次，不会重复调用模型', async () => {
   const { judge, gm } = makeGame([{ isYes: true, yesProb: 0.9, similarity: 0.3, usage: null }]);
   gm.setQuestion('c', Q1, { userId: 'u1', userName: 'A' });

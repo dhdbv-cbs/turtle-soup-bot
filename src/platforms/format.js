@@ -40,7 +40,11 @@ export function formatAskResult(result, { mention = defaultMention } = {}) {
         return { text: `${who}：这句话我没拆出可以核对的内容，换个说法再提交一次？`, users };
       }
       const lines = items.map((it) => `${it.isYes ? '✅' : '❌'} ${it.text}`);
-      const text = `${who}：\n🧾 逐句核对（${items.length} 句）\n${lines.join('\n')}`;
+      // 每句都对却没通关：说明方向对了，但还差最关键的那一环，给一句提示免得玩家卡住
+      // （走到这里一定是没通关——通关那条走的是 win 分支）
+      const allYes = items.every((it) => it.isYes);
+      const tail = allYes ? '\n\n💡 每句都对，但还没说中核心谜底，再往真相推一步。' : '';
+      const text = `${who}：\n🧾 逐句核对（${items.length} 句）\n${lines.join('\n')}${tail}`;
       return { text, users };
     }
 
