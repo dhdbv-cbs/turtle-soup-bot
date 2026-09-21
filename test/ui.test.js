@@ -199,6 +199,49 @@ test('已登录时渲染主界面与通道状态', async () => {
   assert.ok(ui.calls.includes('/api/config'));
 });
 
+test('概览页的「重启进程」按钮只在后端支持时出现', async () => {
+  const makeRoutes = (canRestart) => ({
+    '/api/overview': {
+      version: '9.9.9',
+      uptime: 12,
+      configFile: '/tmp/config.json',
+      configProblems: [],
+      appliedAt: null,
+      questions: 1,
+      channels: {},
+      canRestart,
+    },
+    '/api/config': {
+      problems: [],
+      config: {
+        admin: { host: '127.0.0.1', port: 4319, hasPassword: true },
+        judge: { provider: 'gateway', winThreshold: 0.8, yesThreshold: 0.5, providers: {} },
+        discord: { enabled: false, helpText: '', token: '', tokenSet: false },
+        qq: {
+          napcat: { enabled: false, wsUrl: 'ws://127.0.0.1:3001', helpText: '', accessToken: '', accessTokenSet: false },
+          official: { enabled: false, appId: '', sandbox: true, helpText: '', guildMessages: false, appSecret: '', appSecretSet: false },
+        },
+      },
+    },
+  });
+  const boot = (canRestart) => bootUi({
+    state: { needsSetup: false, authenticated: true, passwordMinLength: 6, version: '9.9.9' },
+    routes: makeRoutes(canRestart),
+  });
+
+  const on = await boot(true);
+  const html = on.html();
+  assert.match(html, /id="reapply"/, '两个按钮要能区分：通道重启 / 进程重启');
+  assert.match(html, /id="restart"/);
+  assert.match(html, /重启进程/);
+  assert.match(html, /\.env/, '要说清楚这个按钮是给 .env / 依赖 / 代码改动用的');
+  assert.match(html, /需要重新登录/);
+
+  const off = await boot(false);
+  assert.doesNotMatch(off.html(), /id="restart"/, '后端没给重启能力就不显示这个按钮');
+  assert.match(off.html(), /id="reapply"/, '通道重启按钮照旧');
+});
+
 test('概览页带「网络代理」表单：地址、密码占位、当前生效状态', async () => {
   const base = {
     '/api/overview': {

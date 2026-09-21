@@ -109,11 +109,19 @@ test('概览返回三条通道状态与评判渠道可用性', async () => {
   assert.equal(r.data.questions, 1);
   assert.equal(r.data.judge.ready, true);
   assert.equal(r.data.judge.label, 'Vercel AI Gateway');
-  // 并发负载：没传 games 时也要有默认值，不能 500
+  // 没传 games 时也要有默认值，不能 500
   assert.equal(typeof r.data.judge.active, 'number');
   assert.equal(typeof r.data.judge.queued, 'number');
+  // 没传 restart 时界面不该显示「重启进程」按钮
+  assert.equal(r.data.canRestart, false);
   assert.ok(!r.raw.includes('vck_overview_leak_check'), '概览里不能出现密钥明文');
   assert.ok(!r.raw.includes('apiKey'), '概览里不应带原始渠道配置');
+});
+
+test('没有重启能力时 /api/restart 回 501，不会静默什么都不做', async () => {
+  const r = await call('/api/restart', { method: 'POST' });
+  assert.equal(r.status, 501);
+  assert.match(r.data.error, /手动重启/);
 });
 
 test('概览能反映并发负载（正在评判 / 排队 / 活跃频道数）', async () => {

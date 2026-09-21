@@ -81,6 +81,25 @@ function setPath(obj, path, value) {
   cur[parts[parts.length - 1]] = value;
 }
 
+// 重启进程后后台会短暂连不上：轮询 /api/state（不需要登录态）等它回来。
+// 先等一会儿再开始问，否则可能问到还没停掉的老进程。
+async function waitServerBack({ gapMs = 800, tries = 50 } = {}) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await sleep(1500);
+  let ok = 0;
+  for (let i = 0; i < tries; i += 1) {
+    try {
+      const res = await fetch('/api/state', { cache: 'no-store' });
+      ok = res.ok ? ok + 1 : 0;
+      if (ok >= 2) return true; // 连续两次成功，说明新进程已经稳定在服务
+    } catch {
+      ok = 0;
+    }
+    await sleep(gapMs);
+  }
+  return false;
+}
+
 function fmtUptime(sec) {
   const s = Number(sec) || 0;
   const d = Math.floor(s / 86400);
@@ -609,7 +628,10 @@ function overviewHtml() {
       <div class="sub">配置保存后会自动按新配置重启对应通道。</div>
       ${chans}
       <div class="actions"><button id="reapply">重启所有通道</button>
+        ${ov.canRestart ? '<button class="ghost danger" id="restart">重启进程</button>' : ''}
         <span class="hint">最近一次应用：${ov.appliedAt ? esc(new Date(ov.appliedAt).toLocaleString('zh-CN')) : '—'}</span></div>
+      ${ov.canRestart ? `<div class="hint">「重启进程」用来让 <b>.env</b>、新装的依赖、改过的代码、后台监听地址与端口生效：
+        进程会重开（几秒），期间机器人收不到消息，页面随后自动刷新，需要重新登录。</div>` : ''}
     </div>
     ${proxyCard}
     <div class="card">
@@ -779,6 +801,32 @@ function bindApp() {
       toast('正在重启通道');
       setTimeout(loadOverview, 1200);
     } catch (e) { toast(e.message, 'bad'); }
+  });
+
+  document.getElementById('restart')?.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    if (!confirm('重启整个进程？\n\n- 通道会断开几秒，期间机器人收不到消息\n- 用来让 .env、新依赖、代码改动、监听地址与端口生效\n- 重启后需要重新登录后台')) return;
+
+    btn.disabled = true;
+    btn.textContent = '正在重启…';
+    try {
+      const r = await api('/api/restart', { method: 'POST' });
+      toast(r.note || '正在重启进程…');
+    } catch (e) {
+      toast(e.message, 'bad');
+      btn.disabled = false;
+      btn.textContent = '重启进程';
+      return;
+    }
+
+    // 重启期间后台会短暂连不上：等它回来再刷新页面
+    if (await waitServerBack()) {
+      location.reload();
+    } else {
+      toast('没等到后台恢复，请手动刷新页面', 'bad');
+      btn.disabled = false;
+      btn.textContent = '重启进程';
+    }
   });
 
   document.getElementById('addq')?.addEventListener('click', async () => {

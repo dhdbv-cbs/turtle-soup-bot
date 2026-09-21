@@ -26,6 +26,8 @@ const PUBLIC_DIR = join(__dirname, '..', '..', 'public');
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 小时
 const LOGIN_WINDOW_MS = 60 * 1000;
 const LOGIN_MAX_FAILURES = 8;
+// 重启前先把响应发出去，让浏览器能显示"正在重启"，再去停服务、拉新进程
+const RESTART_DELAY_MS = 400;
 
 function appVersion() {
   try {
@@ -59,7 +61,9 @@ function judgeLoad(games) {
   };
 }
 
-export function createAdminApp({ runtime, questionStore, games = null }) {
+// restart：可选的进程重启器（{ accept, run }，见 src/restart.js）；
+// 没传就不暴露重启接口，后台界面也不会显示那个按钮。
+export function createAdminApp({ runtime, questionStore, games = null, restart = null }) {
   const app = express();
   const sessions = new Map(); // token -> expiresAt
   const loginFailures = new Map(); // ip -> { count, since }
@@ -173,6 +177,8 @@ export function createAdminApp({ runtime, questionStore, games = null }) {
       questions: questionStore.count,
       judge: { ...publicJudgeStatus(), ...judgeLoad(games) },
       proxy: proxySummary(),
+      // 后台界面据此决定要不要显示「重启进程」按钮
+      canRestart: !!restart,
     });
   });
 
@@ -216,6 +222,28 @@ export function createAdminApp({ runtime, questionStore, games = null }) {
   app.post('/api/runtime/apply', auth, (req, res) => {
     runtime.apply().catch((e) => error('通道重启失败：', e?.message || String(e)));
     res.json({ ok: true, channels: runtime.status() });
+  });
+
+  // 进程重启：有些改动热重启通道解决不了（.env、依赖、代码、监听端口），得换个进程
+  app.post('/api/restart', auth, (req, res) => {
+    if (!restart) {
+      return res.status(501).json({ error: '当前进程没有提供重启能力，请在控制台手动重启' });
+    }
+    const accepted = restart.accept();
+    if (!accepted.ok) {
+      return res.status(409).json({ error: '重启已经在进行中了，请等它自己回来' });
+    }
+    log(`后台请求重启进程（${accepted.mode === 'exit' ? `交给 ${accepted.supervisor} 拉起` : '自己拉起新进程'}）`);
+    res.json({
+      ok: true,
+      mode: accepted.mode,
+      // 重启后会话表是新的，所以要重新登录
+      note: '正在重启进程，几秒后自动恢复（页面会刷新，需要重新登录）',
+    });
+    // 先把响应发出去，再真的停服务 / 拉新进程
+    setTimeout(() => {
+      restart.run().catch((e) => error('重启失败：', e?.message || String(e)));
+    }, RESTART_DELAY_MS);
   });
 
   // ---------- 配置 ----------

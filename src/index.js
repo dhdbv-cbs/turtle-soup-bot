@@ -6,6 +6,7 @@ import { JevJudge } from './game/JevJudge.js';
 import { GameManager } from './game/GameManager.js';
 import { CommandHandler } from './CommandHandler.js';
 import { BotRuntime } from './runtime.js';
+import { createRestarter } from './restart.js';
 import { judgeReadiness } from './judge/providers.js';
 import { createAdminApp } from './web/server.js';
 import { log, error, warn } from './utils/logger.js';
@@ -51,12 +52,46 @@ async function main() {
   const runtime = new BotRuntime(handler);
 
   // 5. 后台界面 + API
-  const app = createAdminApp({ runtime, questionStore: questions, games });
   const { host, port } = config.admin;
-  const server = await new Promise((resolve, reject) => {
-    const s = app.listen(port, host, () => resolve(s));
-    s.on('error', reject);
-  }).catch((e) => {
+  let server = null; // 重启时要先放开它（否则新进程抢不到端口）
+
+  // 起监听（函数声明会提升，所以可以先在重启器里引用；app 在下面才创建，调用时才有值）
+  function listen() {
+    return new Promise((resolve, reject) => {
+      const s = app.listen(port, host, () => resolve(s));
+      s.on('error', reject);
+    });
+  }
+
+  // 进程重启：停通道 + 放开端口 → 拉新进程（有守护进程时只退出自己）→ 本进程退出
+  const restarter = createRestarter({
+    stop: async () => {
+      await runtime.stopAll();
+      const closing = server;
+      server = null;
+      if (!closing) return;
+      await new Promise((resolve) => {
+        closing.close(() => resolve());
+        // 浏览器那边的 keep-alive 连接会拖住 close 的回调，直接掐掉
+        closing.closeAllConnections?.();
+        setTimeout(resolve, 1500).unref?.();
+      });
+    },
+    // 新进程没起来：本进程恢复监听、连回通道，继续服务
+    onFail: async () => {
+      try {
+        server = await listen();
+        log(`新进程没起来，后台界面已在原进程恢复：http://${host}:${port}`);
+      } catch (e) {
+        error(`后台界面没能恢复：${e.message}`);
+      }
+      await runtime.apply();
+    },
+  });
+
+  const app = createAdminApp({ runtime, questionStore: questions, games, restart: restarter });
+
+  server = await listen().catch((e) => {
     error(`后台服务启动失败（${host}:${port}）：${e.message}`);
     process.exit(1);
   });
@@ -91,7 +126,7 @@ async function main() {
       await runtime.stopAll();
     } catch {}
     try {
-      server.close();
+      server?.close();
     } catch {}
     process.exit(0);
   };
