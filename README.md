@@ -148,6 +148,25 @@ http://127.0.0.1:4319
 
 参考：[Vercel AI Gateway 的 Evaluation 文档](https://vercel.com/docs/ai-gateway/modalities/evaluation)、[AI SDK Evaluation 文档](https://ai-sdk.dev/docs/ai-sdk-core/evaluation)、[TypeSafe 发布公告](https://typesafe.ai/blog/introducing-system-one-models-and-jev)、[Netlify 的 Jev 上线说明](https://www.netlify.com/changelog/typesafe-jev-ai-gateway)。
 
+### 题面怎么写才合 System One 的脾气
+
+`state` / `questions` 不是聊天提示词：官方要的是「懂行的人一秒内能给出的判断」，写成一串推理要求会白花一次评判。依据：[State](https://docs.typesafe.ai/concepts/state)、[Primitives](https://docs.typesafe.ai/primitives)、[Advanced: structure](https://docs.typesafe.ai/primitives/advanced)。
+
+| 官方规则 | 本项目的落地 |
+|----------|--------------|
+| **一个问题只放一个瞬间判断**——"Ask for one snap judgment per question"，"Analyze this message and determine the best course of action" 被明确列为反例 | 逐句核对问的就是「玩家这一句是否符合谜底？」，不写"不要孤立抠字面"这类叮嘱 |
+| **要带的材料用结构化字段跟着问题走**——"pass in the relevant subfields instead of serializing them into a string template" | `instructions` 用对象：`{ question, sentence, focus }` |
+| **多个判断放同一次请求**——所有问题共享同一个 state、各自独立求值、答案按你给的 key 返回 | `/ask` 的「整段相似度 + 每句一个布尔题」就是一次请求；`@ai-sdk/typesafe-ai` 也只发**一次** `POST /v1/systemone` |
+| **问题的 id 不会发给模型**——"The ids are not sent to the model" | 题面自足：句子写在 `instructions.sentence` 里，绝不写"判断 s2 那一句" |
+| **`criteria` 说明"是/否"各代表什么**（Noul 的 `criteria.true/false` 是可选澄清） | 判断标准放 criteria，不堆在题面里 |
+| `type: 'boolean'` 在 TypeSafe 侧就是 **Noul** 原语 | 返回的是 0~1 的 `noul`，本项目按 `config.judge.yesThreshold` 折成 ✅/❌ |
+
+三处**故意没改**的地方（都直接牵动通关判定，要等配好 Key 能真跑之后再动，不盲改）：
+
+- **`isYes` / `similarity` 两道老题仍是长句式**：`isYes` 的题面与 criteria 有重复；`similarity` 题面里带着"仅仅猜中某个细节不能给高分"这类调校话术。它们标定着 `config.judge.winThreshold`，这一轮只改了新增的逐句题面。
+- **state 还是带【】标签的整段文本**：官方建议多段内容用对象（"Use an object for most requests"，例如 `{ 汤面, 汤底, 玩家发言 }`）。换成对象会让 `similarity` 看到的东西变样，可能影响通关标定，所以先不动。
+- **题面语言是中文**：官方 State 页写明 Jev 的主要训练语言是英语，"other languages, including CJK scripts, are accepted but **currently have lower accuracy**"。材料只能是中文，但 `instructions` / `criteria` 这类**判断指令**换成英文有机会更准——同样留到能真跑评判时再对比。
+
 ### 要不要为每个入口写一套？
 
 **不用。** 这些入口都实现了 AI SDK 同一套 `Experimental_EvaluationModel` 接口（`provider.evaluationModel(modelId)`，返回的对象实现 `doEvaluate`），所以评判逻辑只有一份，差别仅在"怎么拿到模型实例"。代码里对应 `src/judge/providers.js` 的登记表：一个入口一条记录（依赖包 + 工厂函数 + 默认模型），运行时按当前渠道动态构造。

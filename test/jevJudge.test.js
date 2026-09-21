@@ -49,26 +49,34 @@ test('逐句核对：整段一起发给 Jev，代词才有先行词（回归：�
   // 整段在 state 里，Jev 能看到"它"指的是海龟汤
   assert.match(state, /【玩家发言】\n我爱海龟汤，它很好喝/);
   assert.match(state, /【完整谜底/);
+});
 
-  const questions = buildSentenceQuestions(['我爱海龟汤', '它很好喝']);
-  const ids = Object.keys(questions);
-  assert.deepEqual(ids, ['s1', 's2'], '每句一个问题，都在同一次调用里');
+test('逐句核对题面：一句话一个"瞬间判断"，材料跟着问题走（官方 System One 写法）', () => {
+  const items = ['我爱海龟汤', '它很好喝'];
+  const questions = buildSentenceQuestions(items);
+  assert.deepEqual(Object.keys(questions), ['s1', 's2'], '一次请求里给每句一个问题');
 
-  for (const id of ids) {
-    assert.equal(questions[id].type, 'boolean');
+  for (const id of Object.keys(questions)) {
+    const q = questions[id];
+    assert.equal(q.type, 'boolean');
     // AI SDK 的校验：boolean 题的 criteria 只允许 true / false 两个键
-    assert.deepEqual(Object.keys(questions[id].criteria).sort(), ['false', 'true']);
+    assert.deepEqual(Object.keys(q.criteria).sort(), ['false', 'true']);
+
+    // 题面是"一个懂行的人一秒内能给出的判断"，不是"分析一下再决定"
+    assert.equal(typeof q.instructions, 'object', '材料用结构化字段带，不拼进字符串模板');
+    assert.deepEqual(Object.keys(q.instructions).sort(), ['focus', 'question', 'sentence']);
+    assert.ok(q.instructions.question.length <= 30, `题面要短：${q.instructions.question}`);
+    assert.match(q.instructions.question, /是否符合谜底/);
+    assert.ok(q.instructions.focus.length <= 40, `focus 只是一句指向：${q.instructions.focus}`);
   }
 
-  // 题面必须写明"结合整段理解代词/省略"，并把这句原文带上
-  assert.match(questions.s2.instructions, /它很好喝/);
-  assert.match(questions.s2.instructions, /整段/);
-  assert.match(questions.s2.instructions, /代词/);
-  assert.match(questions.s2.instructions, /省略的主语/);
-  // 也要求别因为整段接近谜底就给单句判是
-  assert.match(questions.s2.instructions, /不要因为整段整体接近谜底/);
-  assert.match(questions.s1.instructions, /第 1 句/);
-  assert.match(questions.s2.instructions, /第 2 句/);
+  // 每句原文就在它自己的那条问题里；不能靠 id 互相引用——官方明确"id 不会发给模型"
+  assert.equal(questions.s1.instructions.sentence, '我爱海龟汤');
+  assert.equal(questions.s2.instructions.sentence, '它很好喝');
+  assert.match(questions.s2.instructions.focus, /整段/);
+  // criteria 负责说明"是/否"各代表什么
+  assert.match(questions.s1.criteria.true, /支持/);
+  assert.match(questions.s2.criteria.false, /不支持/);
 });
 
 test('judgeSentences 走同一条"没配 Key 就失败"的路，不联网', async () => {

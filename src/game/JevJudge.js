@@ -66,10 +66,21 @@ const QUESTIONS = {
 };
 
 /**
- * 逐句核对的题面：一次调用里给每一句各出一个布尔题（s1、s2…）。
+ * 逐句核对的题面：一次请求里给每一句各出一个布尔题（s1、s2…）。
  *
- * 关键是要求 Jev **结合【玩家发言】整段**理解这一句：代词（他 / 她 / 它 / 这个）和
- * 省略的主语都按整段的意思来；同时明确"整段接近谜底"不等于"每一句都成立"。
+ * 按 TypeSafe 官方的写法来（docs.typesafe.ai/primitives）：
+ *
+ * 1. **一个问题只要一个"瞬间判断"**。官方明确把"分析一下再决定"列为反例，所以要写
+ *    「这一句是否符合谜底？」这种懂行的人一眼能答的问题，而不是一串推理要求
+ *    （别写成"不要孤立抠字面、也不要因为整段接近就判是"那种提示词腔）。
+ * 2. **要带的材料用结构化字段跟着问题走**。官方原话是 "pass in the relevant subfields
+ *    instead of serializing them into a string template"，所以这句原文放进
+ *    instructions.sentence，而不是拼进问题字符串里。
+ * 3. **问题的 id 不会发给模型**（"The ids are not sent to the model"），所以题面必须自足：
+ *    不能写"判断 s2 那一句"——模型看不到 s2 这个名字。
+ *
+ * 代词怎么解析不靠题面里的叮嘱：整段发言在 state 里，问题只指向"这一句"，
+ * 模型是拿着整段去理解它的；focus 只是把这个指向讲明白。
  *
  * @param {string[]} items 拆好的句子
  * @returns {Record<string, object>} 交给 experimental_evaluate 的 questions
@@ -79,15 +90,14 @@ export function buildSentenceQuestions(items) {
   items.forEach((sentence, index) => {
     questions[`s${index + 1}`] = {
       type: 'boolean',
-      instructions:
-        `结合【玩家发言】整段的意思，判断其中第 ${index + 1} 句是否成立：「${sentence}」。` +
-        '这一句里的代词（他 / 她 / 它 / 这个）和省略的主语，都按整段的意思来理解，' +
-        '不要孤立地抠这一句的字面；也不要因为整段整体接近谜底，就给这一句判是。' +
-        '只有当谜底明确支持这一句（按上面的理解）时才判为是；' +
-        '若为否、与谜底无关、或无法从谜底得出明确结论，都判为否。',
+      instructions: {
+        question: '玩家这一句是否符合谜底？',
+        sentence,
+        focus: '这一句里的代词和省略的主语，按「玩家发言」整段的语境理解',
+      },
       criteria: {
-        true: '按整段语境理解后，谜底明确支持这一句',
-        false: '谜底不支持这一句、与谜底无关，或无法判断',
+        true: '谜底明确支持这一句',
+        false: '谜底不支持、与谜底无关，或无法从谜底得出结论',
       },
     };
   });
