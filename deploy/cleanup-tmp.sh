@@ -28,7 +28,13 @@ fi
 
 echo
 echo "== 清理后 /tmp 里剩下的 tar.gz =="
-ls -l /tmp/*.tar.gz 2>/dev/null | sed 's/^/  /' || echo "  没有"
+# 用 find 而不是 ls + 通配符：本脚本开了 nullglob，无匹配时 ls 会退化成列当前目录
+REST=$(find /tmp -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null)
+if [ -n "$REST" ]; then
+  echo "$REST" | sed 's/^/  /'
+else
+  echo "  没有"
+fi
 
 echo
 echo "== 机器人不受影响（删包只动 /tmp）=="

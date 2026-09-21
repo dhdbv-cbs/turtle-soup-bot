@@ -36,8 +36,13 @@ timeout 3 curl -s -o /dev/null "http://$(hostname -I | awk '{print $1}'):$PORT/a
   || echo "    [OK] 只监听 127.0.0.1"
 
 echo
-echo "== 已注册的斜杠命令 =="
-journalctl -u turtle-soup-bot --since '10 min ago' --no-pager -o cat 2>/dev/null | grep '斜杠命令' | tail -2 | sed 's/^/  /' || echo "  （最近 10 分钟没有注册记录）"
+echo "== 已注册的斜杠命令（取日志里最后一次注册记录）=="
+LASTCMD=$(journalctl -u turtle-soup-bot --no-pager -o cat 2>/dev/null | grep '斜杠命令' | tail -1)
+if [ -n "$LASTCMD" ]; then
+  echo "  $LASTCMD"
+else
+  echo "  （日志里没有注册记录）"
+fi
 
 echo
 echo "== 告警 / 错误（最近 10 分钟）=="
